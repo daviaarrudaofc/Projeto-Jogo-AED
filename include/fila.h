@@ -22,7 +22,6 @@ typedef struct {
 void fila_iniciar(Fila *fila);
 bool fila_enfileirar(Fila *fila, Inimigo inimigo);
 
-/* O ponteiro devolvido permanece valido ate a remocao do inimigo. */
 Inimigo *fila_frente(const Fila *fila);
 
 bool fila_desenfileirar(Fila *fila);

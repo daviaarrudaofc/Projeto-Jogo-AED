@@ -18,7 +18,6 @@ typedef struct {
 void inventario_iniciar(Inventario *inventario);
 bool inventario_adicionar(Inventario *inventario, Item item);
 
-/* A primeira posicao do inventario e 1. */
 bool inventario_buscar(const Inventario *inventario, size_t posicao, Item *item);
 bool inventario_remover(Inventario *inventario, size_t posicao, Item *item);
 

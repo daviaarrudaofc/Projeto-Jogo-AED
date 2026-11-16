@@ -39,7 +39,6 @@ typedef struct {
     char mensagem[TAMANHO_MENSAGEM_JOGO];
 } Jogo;
 
-/* Para reutilizar a mesma variavel, encerre ou limpe a partida anterior. */
 bool jogo_iniciar(Jogo *jogo);
 void jogo_limpar(Jogo *jogo);
 void jogo_atacar(Jogo *jogo);
@@ -50,7 +49,6 @@ void jogo_examinar_portal(Jogo *jogo);
 void jogo_escolher_portal(Jogo *jogo, bool investigar);
 void jogo_abandonar(Jogo *jogo);
 
-/* O inimigo pode mudar ou sair da fila depois de uma acao. */
 const Inimigo *jogo_inimigo_atual(const Jogo *jogo);
 const char *jogo_nome_masmorra(const Jogo *jogo);
 int jogo_experiencia_para_subir(const Cacador *cacador);
