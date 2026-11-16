@@ -1,4 +1,4 @@
-# Solo Leveling: Dungeon Quest
+# Solo Leveling: Dungeon Quest.
 
 Primeira versão jogável em C para a atividade de AED. Você controla um caçador, atravessa duas masmorras e enfrenta a Estátua Divina. Durante o combate por turnos, você pode atacar ou usar uma poção de cura. Derrotar inimigos rende experiência e pontos.
 
