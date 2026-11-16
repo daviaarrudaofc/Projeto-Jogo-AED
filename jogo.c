@@ -1,21 +1,10 @@
 #include "jogo.h"
 
-#include "entrada.h"
-#include "fila.h"
-#include "inventario.h"
 #include "ordenacao.h"
 
+#include <stdarg.h>
 #include <stdio.h>
-
-typedef struct {
-    int vida;
-    int vida_maxima;
-    int ataque;
-    int nivel;
-    int experiencia;
-    int pontos;
-    Inventario inventario;
-} Cacador;
+#include <string.h>
 
 typedef struct {
     const char *nome;
@@ -23,19 +12,29 @@ typedef struct {
     int quantidade;
 } Masmorra;
 
-typedef enum {
-    CACA_EM_CURSO,
-    CACADOR_DERROTADO,
-    CACA_INTERROMPIDA
-} ResultadoCombate;
-
-typedef enum {
-    ITEM_CANCELADO,
-    ITEM_USADO,
-    INVENTARIO_INTERROMPIDO
-} ResultadoItem;
-
 static const Item pocao = {"Pocao de cura", 30};
+
+static const Masmorra masmorras[] = {
+    {"Tunel do Portal", {
+        {"Orc do Tunel", 33, 8, 20, 160, false},
+        {"Goblin do Portal", 20, 6, 15, 100, false}
+    }, 2},
+    {"Templo da Estatua", {
+        {"Estatua Divina", 76, 15, 50, 500, true},
+        {"Sentinela de Pedra", 46, 12, 30, 260, false},
+        {"Cao das Sombras", 36, 10, 20, 200, false}
+    }, 3}
+};
+
+static void anotar_evento(Jogo *jogo, const char *formato, ...)
+{
+    size_t tamanho = strlen(jogo->mensagem);
+    va_list argumentos;
+    va_start(argumentos, formato);
+    vsnprintf(jogo->mensagem + tamanho, sizeof jogo->mensagem - tamanho,
+              formato, argumentos);
+    va_end(argumentos);
+}
 
 static int comparar_inimigos(const void *primeiro, const void *segundo)
 {
@@ -47,209 +46,201 @@ static int comparar_inimigos(const void *primeiro, const void *segundo)
     return poder_a - poder_b;
 }
 
-static bool preparar_fila(Fila *fila, Masmorra *masmorra)
+static bool preparar_fila(Jogo *jogo)
 {
-    /* Ordena por poder antes de definir a sequencia de combate na fila. */
-    quicksort(masmorra->inimigos, masmorra->quantidade,
-              sizeof masmorra->inimigos[0], comparar_inimigos);
+    /* Ordena uma copia. Cada partida comeca com inimigos de vida cheia. */
+    Masmorra masmorra = masmorras[jogo->indice_masmorra];
+    quicksort(masmorra.inimigos, masmorra.quantidade,
+              sizeof masmorra.inimigos[0], comparar_inimigos);
 
-    for (int indice = 0; indice < masmorra->quantidade; ++indice) {
-        if (!fila_enfileirar(fila, masmorra->inimigos[indice])) {
+    for (int indice = 0; indice < masmorra.quantidade; ++indice) {
+        if (!fila_enfileirar(&jogo->fila, masmorra.inimigos[indice])) {
             return false;
         }
     }
 
+    jogo->vida_maxima_inimigo = fila_frente(&jogo->fila)->vida;
     return true;
 }
 
-static ResultadoItem usar_item(Cacador *cacador)
+void jogo_limpar(Jogo *jogo)
 {
-    size_t quantidade = inventario_quantidade(&cacador->inventario);
-    if (quantidade == 0) {
-        puts("O inventario esta vazio.");
-        return ITEM_CANCELADO;
+    fila_limpar(&jogo->fila);
+    inventario_limpar(&jogo->cacador.inventario);
+    jogo->vida_maxima_inimigo = 0;
+    if (jogo->estado == JOGO_EM_COMBATE) {
+        jogo->estado = JOGO_ABANDONADO;
     }
-    puts("\nInventario");
-    for (size_t posicao = 1; posicao <= quantidade; ++posicao) {
-        Item item;
-        if (inventario_buscar(&cacador->inventario, posicao, &item)) {
-            printf("%zu. %s (+%d PV)\n", posicao, item.nome, item.cura);
-        }
-    }
-    puts("0. Voltar");
-
-    int escolha;
-    if (!ler_opcao(0, (int)quantidade, &escolha)) {
-        return INVENTARIO_INTERROMPIDO;
-    }
-    if (escolha == 0) {
-        return ITEM_CANCELADO;
-    }
-    if (cacador->vida == cacador->vida_maxima) {
-        puts("Sua vida ja esta cheia.");
-        return ITEM_CANCELADO;
-    }
-
-    Item item;
-    if (!inventario_remover(&cacador->inventario, (size_t)escolha, &item)) {
-        return ITEM_CANCELADO;
-    }
-
-    int vida_anterior = cacador->vida;
-    cacador->vida += item.cura;
-    if (cacador->vida > cacador->vida_maxima) {
-        cacador->vida = cacador->vida_maxima;
-    }
-
-    printf("Voce usou %s e recuperou %d PV.\n", item.nome,
-           cacador->vida - vida_anterior);
-    return ITEM_USADO;
 }
 
-static ResultadoCombate combater(Cacador *cacador, Inimigo *inimigo)
+static void encerrar_partida(Jogo *jogo, EstadoJogo estado)
 {
-    const char *tipo = inimigo->chefe ? "Chefe" : "Inimigo";
-    printf("\n%s: %s\n", tipo, inimigo->nome);
-
-    while (inimigo->vida > 0 && cacador->vida > 0) {
-        printf("\nSeus PV: %d/%d | Nivel: %d | Ataque: %d | XP: %d/%d\n",
-               cacador->vida, cacador->vida_maxima, cacador->nivel,
-               cacador->ataque, cacador->experiencia, cacador->nivel * 30);
-        printf("%s: %d PV | Ataque: %d\n", inimigo->nome, inimigo->vida,
-               inimigo->ataque);
-        puts("1. Atacar | 2. Inventario | 3. Abandonar partida");
-
-        int escolha;
-        if (!ler_opcao(1, 3, &escolha) || escolha == 3) {
-            return CACA_INTERROMPIDA;
-        }
-
-        if (escolha == 1) {
-            int dano = cacador->ataque < inimigo->vida ? cacador->ataque : inimigo->vida;
-            inimigo->vida -= dano;
-            printf("Voce causou %d de dano.\n", dano);
-        } else {
-            ResultadoItem resultado = usar_item(cacador);
-            if (resultado == INVENTARIO_INTERROMPIDO) {
-                return CACA_INTERROMPIDA;
-            }
-            if (resultado == ITEM_CANCELADO) {
-                continue;
-            }
-        }
-
-        if (inimigo->vida > 0) {
-            int dano = inimigo->ataque < cacador->vida ? inimigo->ataque : cacador->vida;
-            cacador->vida -= dano;
-            printf("%s causou %d de dano.\n", inimigo->nome, dano);
-        }
-    }
-
-    return cacador->vida > 0 ? CACA_EM_CURSO : CACADOR_DERROTADO;
+    jogo->estado = estado;
+    jogo_limpar(jogo);
 }
 
-static void receber_recompensa(Cacador *cacador, const Inimigo *inimigo)
+bool jogo_iniciar(Jogo *jogo)
 {
+    *jogo = (Jogo){
+        .cacador = {.vida = 75, .vida_maxima = 75, .ataque = 15, .nivel = 1},
+        .estado = JOGO_EM_COMBATE
+    };
+    fila_iniciar(&jogo->fila);
+    inventario_iniciar(&jogo->cacador.inventario);
+
+    if (!inventario_adicionar(&jogo->cacador.inventario, pocao) ||
+        !preparar_fila(jogo)) {
+        anotar_evento(jogo, "Memoria insuficiente para iniciar a partida.");
+        encerrar_partida(jogo, JOGO_ERRO);
+        return false;
+    }
+
+    anotar_evento(jogo, "Voce recebeu uma pocao de cura antes de entrar no portal.");
+    return true;
+}
+
+const Inimigo *jogo_inimigo_atual(Jogo *jogo)
+{
+    return fila_frente(&jogo->fila);
+}
+
+const char *jogo_nome_masmorra(const Jogo *jogo)
+{
+    return masmorras[jogo->indice_masmorra].nome;
+}
+
+size_t jogo_total_masmorras(void)
+{
+    return sizeof masmorras / sizeof masmorras[0];
+}
+
+int jogo_experiencia_para_subir(const Cacador *cacador)
+{
+    return cacador->nivel * 30;
+}
+
+static void contra_atacar(Jogo *jogo, const Inimigo *inimigo)
+{
+    Cacador *cacador = &jogo->cacador;
+    int dano = inimigo->ataque < cacador->vida ? inimigo->ataque : cacador->vida;
+    cacador->vida -= dano;
+    anotar_evento(jogo, "\n%s causou %d de dano.", inimigo->nome, dano);
+
+    if (cacador->vida == 0) {
+        anotar_evento(jogo, "\nDerrota! Seus pontos de vida acabaram.");
+        encerrar_partida(jogo, JOGO_DERROTA);
+    }
+}
+
+static void receber_recompensa(Jogo *jogo, const Inimigo *inimigo)
+{
+    Cacador *cacador = &jogo->cacador;
     cacador->experiencia += inimigo->experiencia;
     cacador->pontos += inimigo->pontos;
-    printf("%s foi derrotado. +%d XP e +%d pontos.\n",
-           inimigo->nome, inimigo->experiencia, inimigo->pontos);
+    anotar_evento(jogo, "\n%s foi derrotado. +%d XP e +%d pontos.",
+                  inimigo->nome, inimigo->experiencia, inimigo->pontos);
 
-    while (cacador->experiencia >= cacador->nivel * 30) {
-        cacador->experiencia -= cacador->nivel * 30;
+    while (cacador->experiencia >= jogo_experiencia_para_subir(cacador)) {
+        cacador->experiencia -= jogo_experiencia_para_subir(cacador);
         ++cacador->nivel;
         cacador->vida_maxima += 12;
         cacador->vida += 12;
         cacador->ataque += 4;
-        printf("Nivel %d alcancado! +12 PV e +4 de ataque.\n", cacador->nivel);
+        anotar_evento(jogo, "\nNivel %d alcancado! +12 PV e +4 de ataque.",
+                      cacador->nivel);
     }
 }
 
-static ResultadoCombate explorar_masmorra(Cacador *cacador, Masmorra *masmorra)
+static void concluir_masmorra(Jogo *jogo)
 {
-    Fila fila;
-    fila_iniciar(&fila);
+    Cacador *cacador = &jogo->cacador;
 
-    if (!preparar_fila(&fila, masmorra)) {
-        fila_limpar(&fila);
-        puts("Memoria insuficiente para preparar a masmorra.");
-        return CACA_INTERROMPIDA;
+    cacador->pontos += 100;
+    anotar_evento(jogo, "\nMasmorra concluida! +100 pontos. Total: %d", cacador->pontos);
+
+    if (jogo->indice_masmorra + 1 == jogo_total_masmorras()) {
+        anotar_evento(jogo, "\nVitoria! Voce derrotou o chefe final.");
+        encerrar_partida(jogo, JOGO_VITORIA);
+        return;
     }
 
-    printf("\n=== %s ===\n", masmorra->nome);
-    ResultadoCombate resultado = CACA_EM_CURSO;
-    Inimigo *inimigo = fila_frente(&fila);
-
-    while (inimigo != NULL) {
-        resultado = combater(cacador, inimigo);
-        if (resultado != CACA_EM_CURSO) {
-            break;
-        }
-
-        receber_recompensa(cacador, inimigo);
-        fila_desenfileirar(&fila);
-        inimigo = fila_frente(&fila);
-    }
-
-    fila_limpar(&fila);
-    return resultado;
-}
-
-int jogar(const char *nome)
-{
-    Cacador cacador = {.vida = 75, .vida_maxima = 75, .ataque = 15, .nivel = 1};
-    Masmorra masmorras[] = {
-        {"Tunel do Portal", {
-            {"Orc do Tunel", 33, 8, 20, 160, false},
-            {"Goblin do Portal", 20, 6, 15, 100, false}
-        }, 2},
-        {"Templo da Estatua", {
-            {"Estatua Divina", 76, 15, 50, 500, true},
-            {"Sentinela de Pedra", 46, 12, 30, 260, false},
-            {"Cao das Sombras", 36, 10, 20, 200, false}
-        }, 3}
-    };
-    const size_t total_masmorras = sizeof masmorras / sizeof masmorras[0];
-
-    inventario_iniciar(&cacador.inventario);
-    if (!inventario_adicionar(&cacador.inventario, pocao)) {
-        puts("Memoria insuficiente para iniciar a partida.");
-        return -1;
-    }
-
-    printf("\n%s, voce recebeu uma pocao de cura antes de entrar no portal.\n", nome);
-    ResultadoCombate resultado = CACA_EM_CURSO;
-
-    for (size_t indice = 0; indice < total_masmorras; ++indice) {
-        resultado = explorar_masmorra(&cacador, &masmorras[indice]);
-        if (resultado != CACA_EM_CURSO) {
-            break;
-        }
-
-        cacador.pontos += 100;
-        printf("Masmorra concluida! +100 pontos. Total: %d\n", cacador.pontos);
-
-        if (indice + 1 < total_masmorras) {
-            if (inventario_adicionar(&cacador.inventario, pocao)) {
-                puts("Voce coletou uma pocao de cura.");
-            } else {
-                puts("Memoria insuficiente para guardar a pocao encontrada.");
-            }
-        }
-    }
-
-    inventario_limpar(&cacador.inventario);
-    if (resultado == CACA_INTERROMPIDA) {
-        puts("\nPartida interrompida.");
-        return -1;
-    }
-
-    if (resultado == CACADOR_DERROTADO) {
-        puts("\nDerrota! Seus pontos de vida acabaram.");
+    if (inventario_adicionar(&cacador->inventario, pocao)) {
+        anotar_evento(jogo, "\nVoce coletou uma pocao de cura.");
     } else {
-        puts("\nVitoria! Voce derrotou o chefe final.");
+        anotar_evento(jogo, "\nMemoria insuficiente para guardar a pocao encontrada.");
     }
 
-    printf("Pontuacao final: %d\n", cacador.pontos);
-    return cacador.pontos;
+    ++jogo->indice_masmorra;
+    if (!preparar_fila(jogo)) {
+        anotar_evento(jogo, "\nMemoria insuficiente para preparar a masmorra.");
+        encerrar_partida(jogo, JOGO_ERRO);
+    }
+}
+
+void jogo_atacar(Jogo *jogo)
+{
+    if (jogo->estado != JOGO_EM_COMBATE) {
+        return;
+    }
+
+    Inimigo *inimigo = fila_frente(&jogo->fila);
+    int ataque = jogo->cacador.ataque;
+    int dano = ataque < inimigo->vida ? ataque : inimigo->vida;
+    inimigo->vida -= dano;
+    jogo->mensagem[0] = '\0';
+    anotar_evento(jogo, "Voce causou %d de dano.", dano);
+
+    if (inimigo->vida > 0) {
+        contra_atacar(jogo, inimigo);
+        return;
+    }
+
+    receber_recompensa(jogo, inimigo);
+    fila_desenfileirar(&jogo->fila);
+    const Inimigo *proximo = jogo_inimigo_atual(jogo);
+    if (proximo == NULL) {
+        concluir_masmorra(jogo);
+    } else {
+        jogo->vida_maxima_inimigo = proximo->vida;
+    }
+}
+
+void jogo_usar_item(Jogo *jogo, size_t posicao)
+{
+    if (jogo->estado != JOGO_EM_COMBATE) {
+        return;
+    }
+
+    Cacador *cacador = &jogo->cacador;
+    jogo->mensagem[0] = '\0';
+    size_t quantidade = inventario_quantidade(&cacador->inventario);
+    if (quantidade == 0) {
+        anotar_evento(jogo, "O inventario esta vazio.");
+        return;
+    }
+    if (cacador->vida == cacador->vida_maxima) {
+        anotar_evento(jogo, "Sua vida ja esta cheia.");
+        return;
+    }
+
+    Item item;
+    if (!inventario_remover(&cacador->inventario, posicao, &item)) {
+        anotar_evento(jogo, "Item indisponivel.");
+        return;
+    }
+
+    int espaco_para_cura = cacador->vida_maxima - cacador->vida;
+    int cura = item.cura < espaco_para_cura ? item.cura : espaco_para_cura;
+    cacador->vida += cura;
+    anotar_evento(jogo, "Voce usou %s e recuperou %d PV.", item.nome, cura);
+    contra_atacar(jogo, jogo_inimigo_atual(jogo));
+}
+
+void jogo_abandonar(Jogo *jogo)
+{
+    if (jogo->estado == JOGO_EM_COMBATE) {
+        jogo->mensagem[0] = '\0';
+        anotar_evento(jogo, "Partida interrompida.");
+        encerrar_partida(jogo, JOGO_ABANDONADO);
+    }
 }
