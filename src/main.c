@@ -21,9 +21,12 @@ static bool ler_nome(char nome[TAMANHO_NOME])
 static void exibir_controles(void)
 {
     puts("\nNas masmorras, enfrente um inimigo por vez para avancar.");
-    puts("Atacar ou usar uma pocao gasta seu turno.");
-    puts("Voce pode consultar o inventario e voltar sem gastar o turno.");
-    puts("Seus inimigos so contra-atacam se sobreviverem ao turno.");
+    puts("Leia a intencao do inimigo antes de escolher sua acao.");
+    puts("Defender reduz o dano normal.");
+    puts("Contra um golpe carregado, a defesa anula o dano e recupera 1 essencia.");
+    puts("Erga-se consome 1 essencia para atacar junto com uma sombra.");
+    puts("Usar uma pocao gasta o turno. A consulta ao inventario e livre.");
+    puts("Entre as masmorras, examine a inscricao do portal para descobrir uma passagem opcional.");
     puts("Derrote inimigos para ganhar XP, subir de nivel e acumular pontos.");
 }
 
@@ -54,24 +57,66 @@ static void jogar_turno(Jogo *jogo, const Inimigo *inimigo)
     printf("\nSeus PV: %d/%d | Nivel: %d | Ataque: %d | XP: %d/%d\n",
            cacador->vida, cacador->vida_maxima, cacador->nivel,
            cacador->ataque, cacador->experiencia, jogo_experiencia_para_subir(cacador));
-    printf("%s: %d PV | Ataque: %d\n", inimigo->nome, inimigo->vida, inimigo->ataque);
-    puts("1. Atacar | 2. Inventario | 3. Abandonar partida");
+    printf("Essencia: %d/%d | Pontos: %d\n",
+           cacador->essencia, ESSENCIA_MAXIMA, cacador->pontos);
+    printf("%s: %d/%d PV\n", inimigo->nome, inimigo->vida, jogo->vida_maxima_inimigo);
+    printf("Intencao inimiga: %s (%d de dano)\n",
+           jogo_golpe_carregado(jogo) ? "golpe carregado" : "ataque",
+           jogo_dano_previsto(jogo));
+    puts("1. Atacar | 2. Defender");
+    printf("3. Erga-se (%s, %d de dano)\n", cacador->tem_igris ? "Igris" : "Sombra",
+           jogo_dano_sombra(jogo));
+    puts("4. Inventario | 5. Recuar");
+
+    int escolha;
+    if (!ler_opcao(1, 5, &escolha)) {
+        escolha = 5;
+    }
+
+    switch (escolha) {
+        case 1:
+            jogo_atacar(jogo);
+            break;
+        case 2:
+            jogo_defender(jogo);
+            break;
+        case 3:
+            jogo_invocar_sombra(jogo);
+            break;
+        case 4: {
+            int posicao = escolher_item(&cacador->inventario);
+            if (posicao == 0) {
+                return;
+            }
+            if (posicao < 0) {
+                jogo_abandonar(jogo);
+            } else {
+                jogo_usar_item(jogo, (size_t)posicao);
+            }
+            break;
+        }
+        case 5:
+            jogo_abandonar(jogo);
+            break;
+    }
+
+    puts(jogo->mensagem);
+}
+
+static void jogar_portal(Jogo *jogo)
+{
+    puts("\n=== Portal ===");
+    puts("1. Seguir para o Templo");
+    puts(jogo->portal_examinado ? "2. Entrar na passagem opcional" : "2. Examinar inscricao");
+    puts("3. Recuar");
 
     int escolha;
     if (!ler_opcao(1, 3, &escolha) || escolha == 3) {
         jogo_abandonar(jogo);
-    } else if (escolha == 1) {
-        jogo_atacar(jogo);
+    } else if (escolha == 2 && !jogo->portal_examinado) {
+        jogo_examinar_portal(jogo);
     } else {
-        int posicao = escolher_item(&cacador->inventario);
-        if (posicao == 0) {
-            return;
-        }
-        if (posicao < 0) {
-            jogo_abandonar(jogo);
-        } else {
-            jogo_usar_item(jogo, (size_t)posicao);
-        }
+        jogo_escolher_portal(jogo, escolha == 2);
     }
 
     puts(jogo->mensagem);
@@ -91,7 +136,12 @@ static int jogar(const char *nome)
     const char *masmorra_anterior = NULL;
     const char *inimigo_anterior = NULL;
 
-    while (jogo.estado == JOGO_EM_COMBATE) {
+    while (jogo.estado == JOGO_EM_COMBATE || jogo.estado == JOGO_PORTAL) {
+        if (jogo.estado == JOGO_PORTAL) {
+            jogar_portal(&jogo);
+            continue;
+        }
+
         const char *masmorra = jogo_nome_masmorra(&jogo);
         const Inimigo *inimigo = jogo_inimigo_atual(&jogo);
         if (masmorra != masmorra_anterior) {

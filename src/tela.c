@@ -22,6 +22,7 @@ static const COLORREF cor_suave = RGB(164, 176, 208);
 static const COLORREF cor_portal = RGB(175, 146, 255);
 static const COLORREF cor_vida = RGB(86, 224, 181);
 static const COLORREF cor_dano = RGB(247, 114, 155);
+static const COLORREF cor_alerta = RGB(255, 197, 115);
 
 static HFONT criar_fonte(int tamanho, int peso)
 {
@@ -41,6 +42,17 @@ static void painel(HDC contexto, int x, int y, int largura, int altura, COLORREF
 {
     preencher(contexto, x, y, largura, altura, borda);
     preencher(contexto, x + 1, y + 1, largura - 2, altura - 2, cor_painel);
+}
+
+static COLORREF cor_pulso(COLORREF base, COLORREF destaque, unsigned efeito_ms)
+{
+    const unsigned duracao = 260;
+    unsigned peso = efeito_ms < duracao ? efeito_ms : duracao;
+    unsigned restante = duracao - peso;
+
+    return RGB((GetRValue(base) * restante + GetRValue(destaque) * peso) / duracao,
+               (GetGValue(base) * restante + GetGValue(destaque) * peso) / duracao,
+               (GetBValue(base) * restante + GetBValue(destaque) * peso) / duracao);
 }
 
 static void escrever(HDC contexto, HFONT fonte, COLORREF cor, int x, int y,
@@ -193,67 +205,138 @@ static void barra(Pintura *pintura, const wchar_t *rotulo, int atual, int maximo
     }
 }
 
-static void desenhar_cacador(Pintura *pintura, Cacador *cacador, const wchar_t *nome)
+static void desenhar_cacador(Pintura *pintura, const Jogo *jogo, const wchar_t *nome,
+                             unsigned efeito_ms)
 {
+    const Cacador *cacador = &jogo->cacador;
     wchar_t detalhes[64];
+    wchar_t sombra[48];
     HDC contexto = pintura->contexto;
 
-    painel(contexto, 40, 111, 367, 218, cor_borda);
+    painel(contexto, 40, 111, 367, 218, cor_pulso(cor_borda, cor_vida, efeito_ms));
     preencher(contexto, 40, 111, 3, 218, cor_vida);
-    texto(pintura, FONTE_SECAO, COR_TEXTO, 64, 129, 318, 37, nome);
-    wsprintfW(detalhes, L"N\u00edvel %d    \u2022    Ataque %d", cacador->nivel,
-              cacador->ataque);
-    texto(pintura, FONTE_TEXTO, cor_suave, 64, 168, 318, 27, detalhes);
+    texto(pintura, FONTE_SECAO, COR_TEXTO, 64, 121, 229, 37, nome);
+    preencher(contexto, 306, 128, 77, 24, RGB(50, 41, 88));
+    escrever(contexto, pintura->fontes[FONTE_LEGENDA], cor_portal,
+             306, 128, 77, 24, DT_CENTER | DT_SINGLELINE | DT_VCENTER, L"RANK E");
+    wsprintfW(detalhes, L"Nv. %d   \u2022   Ataque %d   \u2022   %d pontos", cacador->nivel,
+              cacador->ataque, cacador->pontos);
+    texto(pintura, FONTE_TEXTO, cor_suave, 64, 159, 319, 22, detalhes);
 
-    barra(pintura, L"VIDA", cacador->vida, cacador->vida_maxima, 64, 209, 319, cor_vida);
+    barra(pintura, L"VIDA", cacador->vida, cacador->vida_maxima, 64, 189, 319, cor_vida);
     barra(pintura, L"EXPERI\u00caNCIA", cacador->experiencia, jogo_experiencia_para_subir(cacador),
-          64, 257, 319, cor_portal);
+          64, 229, 319, cor_portal);
 
-    wsprintfW(detalhes, L"%d pontos", cacador->pontos);
-    texto(pintura, FONTE_LEGENDA, cor_suave, 64, 298, 318, 21, detalhes);
+    wsprintfW(detalhes, L"ESS\u00caNCIA  %d / %d", cacador->essencia, ESSENCIA_MAXIMA);
+    texto(pintura, FONTE_LEGENDA, COR_TEXTO, 64, 274, 168, 19, detalhes);
+    const int largura_bloco = 144 / ESSENCIA_MAXIMA;
+    for (int indice = 0; indice < ESSENCIA_MAXIMA; ++indice) {
+        COLORREF cor = indice < cacador->essencia ? cor_portal : COR_CAMPO;
+        preencher(contexto, 239 + indice * largura_bloco, 278, largura_bloco - 4, 11, cor);
+    }
+
+    const bool pode_invocar = cacador->essencia > 0;
+    if (pode_invocar) {
+        wsprintfW(sombra, cacador->tem_igris ? L"Igris \u2022 %d de dano" : L"Sombra \u2022 %d de dano",
+                  jogo_dano_sombra(jogo));
+    } else {
+        wsprintfW(sombra, cacador->tem_igris ? L"Igris sem ess\u00eancia" : L"Sombra sem ess\u00eancia");
+    }
+    texto(pintura, FONTE_LEGENDA, pode_invocar ? cor_portal : cor_suave, 64, 296, 319, 22, sombra);
 }
 
-static void desenhar_inimigo(Pintura *pintura, Jogo *jogo)
+static void desenhar_inimigo(Pintura *pintura, Jogo *jogo, unsigned efeito_ms)
 {
     const Inimigo *inimigo = jogo_inimigo_atual(jogo);
     HDC contexto = pintura->contexto;
-    painel(contexto, 427, 111, 453, 218, cor_borda);
     if (inimigo == NULL) {
         return;
     }
 
-    const COLORREF cor = inimigo->chefe ? cor_dano : cor_portal;
-    const wchar_t *tipo = inimigo->chefe ? L"CHEFE FINAL" : L"INIMIGO";
+    bool carregado = jogo_golpe_carregado(jogo);
+    const COLORREF cor = carregado ? cor_alerta : cor_dano;
+    const COLORREF fundo_previsao = carregado ? RGB(53, 35, 38) : COR_CAMPO;
+    const COLORREF borda = carregado ? RGB(131, 85, 55) : cor_borda;
+    const wchar_t *tipo = inimigo->chefe ? L"CHEFE" : L"INIMIGO";
+    if (jogo->chefe_em_furia) {
+        tipo = L"CHEFE EM F\u00daRIA";
+    }
+    const wchar_t *dica = L"Defender reduz o dano pela metade.";
+    if (carregado) {
+        dica = jogo->cacador.essencia < ESSENCIA_MAXIMA
+            ? L"Defender anula o dano e recupera 1 de ess\u00eancia."
+            : L"Defender anula o dano.";
+    }
     wchar_t nome[80];
-    wchar_t detalhes[48];
+    wchar_t previsao[32];
     converter_texto(inimigo->nome, nome, 80);
-    wsprintfW(detalhes, L"Ataque %d", inimigo->ataque);
+    wsprintfW(previsao, L"%d de dano", jogo_dano_previsto(jogo));
 
+    painel(contexto, 427, 111, 453, 218, cor_pulso(borda, cor, efeito_ms));
     preencher(contexto, 427, 111, 3, 218, cor);
-    texto(pintura, FONTE_LEGENDA, cor, 451, 132, 404, 20, tipo);
-    texto(pintura, FONTE_SECAO, COR_TEXTO, 451, 158, 404, 37, nome);
-    texto(pintura, FONTE_TEXTO, cor_suave, 451, 199, 404, 27, detalhes);
+    texto(pintura, FONTE_LEGENDA, cor, 451, 126, 404, 19, tipo);
+    texto(pintura, FONTE_SECAO, COR_TEXTO, 451, 148, 404, 37, nome);
     barra(pintura, L"VIDA", inimigo->vida, jogo->vida_maxima_inimigo,
-          451, 256, 404, cor_dano);
+          451, 201, 404, cor_dano);
+
+    preencher(contexto, 451, 250, 404, 62, fundo_previsao);
+    preencher(contexto, 451, 250, 3, 62, carregado ? cor_alerta : cor_borda);
+    texto(pintura, FONTE_FORTE, carregado ? cor_alerta : COR_TEXTO, 465, 253, 234, 27,
+          carregado ? L"GOLPE CARREGADO" : L"PR\u00d3XIMO GOLPE");
+    escrever(contexto, pintura->fontes[FONTE_FORTE], carregado ? cor_alerta : COR_TEXTO,
+             699, 253, 144, 27, DT_RIGHT | DT_SINGLELINE | DT_VCENTER, previsao);
+    texto(pintura, FONTE_LEGENDA, cor_suave, 465, 280, 378, 22, dica);
 }
 
-static void desenhar_combate(Pintura *pintura, Jogo *jogo, const wchar_t *nome)
+static void desenhar_combate(Pintura *pintura, Jogo *jogo, const wchar_t *nome,
+                             unsigned efeito_ms)
 {
     wchar_t masmorra[96];
-    wchar_t etapa[48];
     wchar_t eventos[TAMANHO_MENSAGEM_JOGO];
     converter_texto(jogo_nome_masmorra(jogo), masmorra, 96);
-    wsprintfW(etapa, L"Masmorra %u de %u", (unsigned)jogo->indice_masmorra + 1,
-              (unsigned)jogo_total_masmorras());
 
-    cabecalho(pintura, masmorra, etapa);
-    desenhar_cacador(pintura, &jogo->cacador, nome);
-    desenhar_inimigo(pintura, jogo);
+    cabecalho(pintura, masmorra, L"Sistema \u2022 Previs\u00e3o de combate");
+    desenhar_cacador(pintura, jogo, nome, efeito_ms);
+    desenhar_inimigo(pintura, jogo, efeito_ms);
 
     painel(pintura->contexto, 40, 345, 840, 158, cor_borda);
-    texto(pintura, FONTE_FORTE, cor_portal, 62, 353, 795, 23, L"Registro do combate");
+    texto(pintura, FONTE_FORTE, cor_portal, 62, 353, 795, 23, L"Registro do Sistema");
     converter_texto(jogo->mensagem, eventos, TAMANHO_MENSAGEM_JOGO);
     paragrafo(pintura, FONTE_LEGENDA, COR_TEXTO, 62, 382, 795, 112, eventos);
+}
+
+static void desenhar_escolha_portal(Pintura *pintura, const Jogo *jogo)
+{
+    HDC contexto = pintura->contexto;
+    wchar_t eventos[TAMANHO_MENSAGEM_JOGO];
+    converter_texto(jogo->mensagem, eventos, TAMANHO_MENSAGEM_JOGO);
+
+    cabecalho(pintura, L"Portal do templo", L"Sistema \u2022 Ponto de explora\u00e7\u00e3o");
+    painel(contexto, 40, 111, 401, 392, cor_borda);
+    painel(contexto, 455, 111, 425, 392, cor_borda);
+    preencher(contexto, 455, 111, 3, 392, jogo->portal_examinado ? cor_alerta : cor_portal);
+    texto(pintura, FONTE_LEGENDA, cor_portal, 62, 130, 357, 25, L"PASSAGEM LATERAL");
+
+    int desenho_salvo = SaveDC(contexto);
+    if (desenho_salvo != 0) {
+        IntersectClipRect(contexto, 41, 161, 440, 417);
+        OffsetViewportOrgEx(contexto, -19, -159, NULL);
+        desenhar_portal(contexto);
+        RestoreDC(contexto, desenho_salvo);
+    }
+    paragrafo(pintura, FONTE_TEXTO, cor_suave, 62, 440, 357, 50,
+              L"O portal que leva ao templo continua aberto.");
+
+    const wchar_t *titulo = jogo->portal_examinado ? L"Masmorra Dupla" : L"Inscri\u00e7\u00e3o antiga";
+    const wchar_t *pista = jogo->portal_examinado
+        ? L"Um guardi\u00e3o espera do outro lado. Avalie sua vida antes de entrar."
+        : L"A poeira cobre os s\u00edmbolos na parede. Ainda \u00e9 poss\u00edvel decifrar o que dizem.";
+    texto(pintura, FONTE_SECAO, COR_TEXTO, 480, 132, 374, 45, titulo);
+    paragrafo(pintura, FONTE_TEXTO, cor_suave, 480, 184, 367, 81, pista);
+
+    preencher(contexto, 480, 281, 375, 1, cor_borda);
+    texto(pintura, FONTE_LEGENDA, cor_portal, 480, 295, 374, 27, L"MENSAGEM DO SISTEMA");
+    paragrafo(pintura, FONTE_TEXTO, COR_TEXTO, 480, 329, 370, 148, eventos);
 }
 
 static void desenhar_inventario(Pintura *pintura, const Jogo *jogo)
@@ -315,20 +398,21 @@ static void desenhar_ajuda(Pintura *pintura)
         const wchar_t *titulo;
         const wchar_t *descricao;
     } topicos[] = {
-        {L"Atacar", L"Acerte o inimigo da frente. Se ele sobreviver, vai contra-atacar."},
-        {L"Usar uma po\u00e7\u00e3o", L"Abra o invent\u00e1rio para consultar seus itens. Usar uma po\u00e7\u00e3o recupera vida e consome o turno."},
-        {L"Evoluir", L"Cada inimigo derrotado rende experi\u00eancia e pontos. Subir de n\u00edvel aumenta seu ataque e sua vida."},
-        {L"Concluir a ca\u00e7ada", L"Supere as duas masmorras, derrote a Est\u00e1tua Divina e confira sua pontua\u00e7\u00e3o no ranking."}
+        {L"Atacar", L"Ataque o inimigo da frente. O Sistema mostra quanto dano ele pode causar se sobreviver."},
+        {L"Defender", L"Reduza o dano normal pela metade. Defender um golpe carregado anula o dano e recupera 1 de ess\u00eancia."},
+        {L"Erga-se", L"Gaste 1 de ess\u00eancia para invocar uma sombra que causa mais dano do que seu ataque normal."},
+        {L"Recuperar vida e evoluir", L"Usar po\u00e7\u00e3o consome o turno. Derrote inimigos para ganhar XP, subir de n\u00edvel e aumentar sua vida e ataque."},
+        {L"Explorar o portal", L"Ao abrir o portal do templo, decida se vale a pena examinar a inscri\u00e7\u00e3o na passagem lateral."}
     };
 
     cabecalho(pintura, L"Como jogar", NULL);
     painel(pintura->contexto, 40, 111, 840, 392, cor_borda);
     for (size_t indice = 0; indice < sizeof topicos / sizeof topicos[0]; ++indice) {
-        int y = 134 + (int)indice * 89;
-        texto(pintura, FONTE_SECAO, COR_TEXTO, 66, y, 785, 35, topicos[indice].titulo);
-        paragrafo(pintura, FONTE_TEXTO, cor_suave, 67, y + 39, 778, 38,
+        int y = 123 + (int)indice * 74;
+        texto(pintura, FONTE_FORTE, COR_TEXTO, 66, y, 785, 26, topicos[indice].titulo);
+        paragrafo(pintura, FONTE_TEXTO, cor_suave, 67, y + 29, 778, 40,
                   topicos[indice].descricao);
-        preencher(pintura->contexto, 66, y + 75, 788, 1, cor_borda);
+        preencher(pintura->contexto, 66, y + 69, 788, 1, cor_borda);
     }
 }
 
@@ -367,7 +451,8 @@ static void desenhar_resultado(Pintura *pintura, const Jogo *jogo, const wchar_t
 }
 
 static void pintar_tela(HDC contexto, const RECT *cliente, TelaJogo tela, Jogo *jogo,
-                       const Ranking *ranking, const wchar_t *nome, const wchar_t *erro_nome)
+                       const Ranking *ranking, const wchar_t *nome,
+                       const wchar_t *erro_nome, unsigned efeito_ms)
 {
     Pintura pintura = {contexto, {
         criar_fonte(15, FW_NORMAL), criar_fonte(17, FW_NORMAL),
@@ -382,7 +467,10 @@ static void pintar_tela(HDC contexto, const RECT *cliente, TelaJogo tela, Jogo *
             desenhar_menu(&pintura, erro_nome);
             break;
         case TELA_COMBATE:
-            desenhar_combate(&pintura, jogo, nome);
+            desenhar_combate(&pintura, jogo, nome, efeito_ms);
+            break;
+        case TELA_PORTAL:
+            desenhar_escolha_portal(&pintura, jogo);
             break;
         case TELA_INVENTARIO:
             desenhar_inventario(&pintura, jogo);
@@ -406,7 +494,8 @@ static void pintar_tela(HDC contexto, const RECT *cliente, TelaJogo tela, Jogo *
 }
 
 void tela_pintar(HWND janela, HDC contexto, TelaJogo tela, Jogo *jogo,
-                 const Ranking *ranking, const wchar_t *nome, const wchar_t *erro_nome)
+                 const Ranking *ranking, const wchar_t *nome,
+                 const wchar_t *erro_nome, unsigned efeito_ms)
 {
     RECT cliente;
     if (!GetClientRect(janela, &cliente) || cliente.right <= 0 || cliente.bottom <= 0) {
@@ -417,11 +506,11 @@ void tela_pintar(HWND janela, HDC contexto, TelaJogo tela, Jogo *jogo,
     HBITMAP imagem = CreateCompatibleBitmap(contexto, cliente.right, cliente.bottom);
     if (buffer != NULL && imagem != NULL) {
         HGDIOBJ anterior = SelectObject(buffer, imagem);
-        pintar_tela(buffer, &cliente, tela, jogo, ranking, nome, erro_nome);
+        pintar_tela(buffer, &cliente, tela, jogo, ranking, nome, erro_nome, efeito_ms);
         BitBlt(contexto, 0, 0, cliente.right, cliente.bottom, buffer, 0, 0, SRCCOPY);
         SelectObject(buffer, anterior);
     } else {
-        pintar_tela(contexto, &cliente, tela, jogo, ranking, nome, erro_nome);
+        pintar_tela(contexto, &cliente, tela, jogo, ranking, nome, erro_nome, efeito_ms);
     }
 
     if (imagem != NULL) {

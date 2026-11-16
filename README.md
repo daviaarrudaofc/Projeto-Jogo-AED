@@ -1,30 +1,42 @@
 # Solo Leveling: Dungeon Quest.
 
-Jogo em C para a atividade de AED. Você controla um caçador, atravessa duas masmorras e enfrenta a Estátua Divina. Durante o combate por turnos, você pode atacar ou usar uma poção de cura. Derrotar inimigos rende experiência e pontos.
+Jogo em C para a atividade de AED. Você começa como caçador de Rank E. O Sistema acompanha o avanço entre portais, e a Estátua Divina guarda o último templo. Sua rota muda se você investigar a inscrição encontrada pelo caminho.
 
 ## Como jogar no Windows
 
-Abra o PowerShell na pasta do projeto com o GCC do MinGW disponível. Para jogar na interface gráfica, compile e abra a janela:
+Abra o PowerShell na pasta do projeto com o GCC do MinGW disponível. Os comandos abaixo compilam e abrem a interface gráfica.
 
 ```powershell
-gcc -std=c11 -Wall -Wextra -Wpedantic interface.c tela.c jogo.c inventario.c fila.c ordenacao.c ranking.c -mwindows -lgdi32 -o dungeon_quest_gui.exe
+gcc -std=c11 -Wall -Wextra -Wpedantic -I include src/interface.c src/tela.c src/jogo.c src/inventario.c src/fila.c src/ordenacao.c src/ranking.c -mwindows -lgdi32 -o dungeon_quest_gui.exe
 .\dungeon_quest_gui.exe
 ```
 
-Digite o nome do caçador e escolha **Iniciar caça**. Durante a partida, acompanhe os pontos de vida e a experiência na tela. Para se curar, abra o **Inventário**, selecione uma poção e clique em **Usar poção**. É possível navegar pelos controles com `Tab` e acionar o controle em destaque com `Enter`.
+Digite o nome do caçador e escolha **Iniciar caça**. No combate, use o mouse ou os atalhos abaixo. `Tab` e `Enter` também funcionam para navegar pelos controles.
+
+| Tecla | Ação |
+| --- | --- |
+| `A` | Atacar. Um inimigo derrotado antes de agir perde a vez. |
+| `D` | Defender. Reduz o dano normal e, diante de um golpe carregado, anula o dano e gera essência. |
+| `E` | **Erga-se**. Gasta uma essência para invocar uma sombra e causar um ataque mais forte. |
+| `I` | Abrir o inventário. Selecionar e usar uma poção recupera vida e consome o turno. |
+| `Esc` | Fechar o inventário sem gastar o turno. |
+
+O aviso de combate informa quando vem um golpe carregado. Se o inimigo estiver quase derrotado, você pode finalizá-lo. Se ele for sobreviver ao ataque, defender pode evitar o golpe e preparar a próxima invocação. Fora do combate, examinar a inscrição revela uma rota opcional com risco e recompensa próprios.
 
 ### Versão de terminal
 
-Para jogar pelo menu de texto:
+Os comandos abaixo compilam e abrem o menu de texto.
 
 ```powershell
-gcc -std=c11 -Wall -Wextra -Wpedantic main.c jogo.c entrada.c inventario.c fila.c ordenacao.c ranking.c -o dungeon_quest.exe
+gcc -std=c11 -Wall -Wextra -Wpedantic -I include src/main.c src/jogo.c src/entrada.c src/inventario.c src/fila.c src/ordenacao.c src/ranking.c -o dungeon_quest.exe
 .\dungeon_quest.exe
 ```
 
-Escolha **1. Iniciar jogo** e digite o nome do caçador. Durante um combate, **1** ataca, **2** abre o inventário e **3** abandona a partida. Usar uma poção consome o turno. O inimigo contra-ataca se ainda estiver vivo. No menu principal, **2** exibe as dez melhores pontuações da sessão.
+No menu principal, **1** inicia e **2** mostra as dez melhores pontuações da sessão. No combate, **1** ataca, **2** defende, **3** invoca uma sombra, **4** abre o inventário e **5** recua.
 
 ## Módulos do projeto
+
+Os arquivos `.c` estão em `src/`. Os cabeçalhos `.h` em `include/` declaram as estruturas e funções usadas entre os módulos.
 
 | Arquivo | Responsabilidade |
 | --- | --- |
@@ -32,7 +44,7 @@ Escolha **1. Iniciar jogo** e digite o nome do caçador. Durante um combate, **1
 | `entrada.c` | Leitura de nomes e validação das opções do menu |
 | `interface.c` | Janela Win32, controles e navegação entre telas |
 | `tela.c` | Desenho das telas, barras e botões da interface gráfica |
-| `jogo.c` | Regras compartilhadas de masmorras, combate, cura, experiência, pontuação e fim da partida |
+| `jogo.c` | Regras compartilhadas de combate, sombras, exploração, experiência e pontuação |
 | `inventario.c` | Lista simplesmente encadeada de itens com funções para iniciar, adicionar, buscar, remover, contar e limpar |
 | `fila.c` | Fila de inimigos, com consulta ao primeiro e remoção após a derrota |
 | `ordenacao.c` | QuickSort recursivo com o primeiro elemento como pivô e varredura do fim para o início, conforme a Aula 15 |

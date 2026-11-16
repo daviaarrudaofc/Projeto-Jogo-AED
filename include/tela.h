@@ -11,6 +11,7 @@ enum { LARGURA_TELA = 920, ALTURA_TELA = 600 };
 typedef enum {
     TELA_MENU,
     TELA_COMBATE,
+    TELA_PORTAL,
     TELA_INVENTARIO,
     TELA_RANKING,
     TELA_AJUDA,
@@ -28,7 +29,7 @@ typedef enum {
 
 void tela_pintar(HWND janela, HDC contexto, TelaJogo tela, Jogo *jogo,
                  const Ranking *ranking, const wchar_t *nome,
-                 const wchar_t *erro_nome);
+                 const wchar_t *erro_nome, unsigned efeito_ms);
 void tela_desenhar_botao(const DRAWITEMSTRUCT *item, TipoBotao tipo);
 
 #endif

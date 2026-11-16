@@ -32,7 +32,7 @@ bool fila_enfileirar(Fila *fila, Inimigo inimigo)
     return true;
 }
 
-Inimigo *fila_frente(Fila *fila)
+Inimigo *fila_frente(const Fila *fila)
 {
     if (fila->inicio == NULL) {
         return NULL;
@@ -49,6 +49,7 @@ bool fila_desenfileirar(Fila *fila)
     NoInimigo *removido = fila->inicio;
     fila->inicio = removido->proximo;
     if (fila->inicio == NULL) {
+        /* Saiu o último. Limpa o fim também, porque esse nó vai ser liberado. */
         fila->fim = NULL;
     }
 

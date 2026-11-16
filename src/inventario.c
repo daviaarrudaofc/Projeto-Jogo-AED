@@ -70,6 +70,7 @@ bool inventario_remover(Inventario *inventario, size_t posicao, Item *item)
     if (anterior == NULL) {
         inventario->inicio = atual->proximo;
     } else {
+        /* Liga o anterior ao próximo pra lista continuar inteira sem o nó que saiu. */
         anterior->proximo = atual->proximo;
     }
 

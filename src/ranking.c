@@ -20,7 +20,7 @@ static int comparar_pontuacoes(const void *primeiro, const void *segundo)
 
 void ranking_registrar(Ranking *ranking, const char *nome, int pontos)
 {
-    /* Quando o vetor esta cheio, apenas uma pontuacao maior substitui a ultima. */
+    /* Com o ranking cheio, a menor pontuação fica no fim e só sai se a nova for maior. */
     if (ranking->quantidade < LIMITE_RANKING) {
         ranking->quantidade++;
     } else if (pontos <= ranking->resultados[LIMITE_RANKING - 1].pontos) {

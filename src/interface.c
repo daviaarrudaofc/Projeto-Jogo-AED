@@ -9,14 +9,21 @@ enum {
     ID_RANKING,
     ID_AJUDA,
     ID_ATACAR,
+    ID_DEFENDER,
+    ID_SOMBRA,
     ID_INVENTARIO,
     ID_ABANDONAR,
+    ID_SEGUIR_TEMPLO,
+    ID_PASSAGEM,
+    ID_RECUAR_PORTAL,
     ID_USAR,
     ID_VOLTAR_COMBATE,
     ID_VOLTAR_RANKING,
     ID_VOLTAR_AJUDA,
     ID_VOLTAR_MENU,
-    ID_RANKING_RESULTADO
+    ID_RANKING_RESULTADO,
+    ID_TIMER_EFEITO = 1,
+    DURACAO_EFEITO = 260
 };
 
 typedef struct {
@@ -31,9 +38,14 @@ static const ConfigBotao configuracoes[] = {
     {ID_INICIAR, TELA_MENU, BOTAO_PRIMARIO, L"Iniciar ca\u00e7a", 552, 275, 312, 48},
     {ID_RANKING, TELA_MENU, BOTAO_SECUNDARIO, L"Ranking", 552, 335, 150, 42},
     {ID_AJUDA, TELA_MENU, BOTAO_SECUNDARIO, L"Como jogar", 714, 335, 150, 42},
-    {ID_ATACAR, TELA_COMBATE, BOTAO_PRIMARIO, L"Atacar", 40, 518, 270, 46},
-    {ID_INVENTARIO, TELA_COMBATE, BOTAO_SECUNDARIO, L"Invent\u00e1rio", 324, 518, 270, 46},
-    {ID_ABANDONAR, TELA_COMBATE, BOTAO_PERIGO, L"Abandonar partida", 610, 518, 270, 46},
+    {ID_ATACAR, TELA_COMBATE, BOTAO_PRIMARIO, L"A \u00b7 Atacar", 40, 518, 160, 46},
+    {ID_DEFENDER, TELA_COMBATE, BOTAO_SECUNDARIO, L"D \u00b7 Defender", 210, 518, 160, 46},
+    {ID_SOMBRA, TELA_COMBATE, BOTAO_SECUNDARIO, L"E \u00b7 Erga-se", 380, 518, 160, 46},
+    {ID_INVENTARIO, TELA_COMBATE, BOTAO_SECUNDARIO, L"I \u00b7 Invent\u00e1rio", 550, 518, 160, 46},
+    {ID_ABANDONAR, TELA_COMBATE, BOTAO_PERIGO, L"Recuar", 720, 518, 160, 46},
+    {ID_SEGUIR_TEMPLO, TELA_PORTAL, BOTAO_SECUNDARIO, L"Seguir ao templo", 40, 518, 270, 46},
+    {ID_PASSAGEM, TELA_PORTAL, BOTAO_PRIMARIO, L"Examinar inscri\u00e7\u00e3o", 324, 518, 270, 46},
+    {ID_RECUAR_PORTAL, TELA_PORTAL, BOTAO_PERIGO, L"Recuar", 610, 518, 270, 46},
     {ID_USAR, TELA_INVENTARIO, BOTAO_PRIMARIO, L"Usar po\u00e7\u00e3o", 40, 518, 270, 46},
     {ID_VOLTAR_COMBATE, TELA_INVENTARIO, BOTAO_SECUNDARIO, L"Voltar ao combate", 324, 518, 270, 46},
     {ID_VOLTAR_RANKING, TELA_RANKING, BOTAO_SECUNDARIO, L"Voltar", 40, 518, 270, 46},
@@ -59,6 +71,8 @@ typedef struct {
     wchar_t nome[TAMANHO_NOME];
     char nome_utf8[TAMANHO_NOME];
     const wchar_t *erro_nome;
+    DWORD inicio_efeito;
+    bool efeito_ativo;
 } Interface;
 
 static bool criar_controles(Interface *aplicacao, HINSTANCE instancia)
@@ -104,6 +118,8 @@ static bool criar_controles(Interface *aplicacao, HINSTANCE instancia)
 
 static void mostrar_tela(Interface *aplicacao, TelaJogo tela)
 {
+    HWND foco_anterior = GetFocus();
+    bool manter_foco = false;
     aplicacao->tela = tela;
     bool tem_itens = tela == TELA_INVENTARIO &&
                      inventario_quantidade(&aplicacao->jogo.cacador.inventario) > 0;
@@ -117,21 +133,35 @@ static void mostrar_tela(Interface *aplicacao, TelaJogo tela)
     } else if (tem_itens) {
         foco = aplicacao->lista_itens;
     }
+    manter_foco = foco != NULL && foco == foco_anterior;
 
     for (int indice = 0; indice < QUANTIDADE_BOTOES; ++indice) {
         const ConfigBotao *config = &configuracoes[indice];
         HWND botao = aplicacao->botoes[indice];
         bool visivel = config->tela == tela;
-        bool habilitado = config->id != ID_USAR || tem_itens;
+        bool habilitado = (config->id != ID_USAR || tem_itens) &&
+                          (config->id != ID_SOMBRA || aplicacao->jogo.cacador.essencia > 0);
+
+        if (visivel && config->id == ID_PASSAGEM) {
+            SetWindowTextW(botao, aplicacao->jogo.portal_examinado ?
+                           L"Entrar na passagem" : L"Examinar inscri\u00e7\u00e3o");
+        }
 
         EnableWindow(botao, habilitado);
         ShowWindow(botao, visivel ? SW_SHOW : SW_HIDE);
-        if (foco == NULL && visivel && habilitado) {
-            foco = botao;
+        if (visivel && habilitado) {
+            if (foco == NULL) {
+                foco = botao;
+            }
+            if (botao == foco_anterior) {
+                manter_foco = true;
+            }
         }
     }
 
-    SetFocus(foco);
+    if (!manter_foco) {
+        SetFocus(foco);
+    }
     InvalidateRect(aplicacao->janela, NULL, FALSE);
 }
 
@@ -142,12 +172,35 @@ static void atualizar_partida(Interface *aplicacao)
         mostrar_tela(aplicacao, TELA_COMBATE);
         return;
     }
+    if (estado == JOGO_PORTAL) {
+        mostrar_tela(aplicacao, TELA_PORTAL);
+        return;
+    }
 
     if (estado == JOGO_VITORIA || estado == JOGO_DERROTA) {
         ranking_registrar(&aplicacao->ranking, aplicacao->nome_utf8,
                          aplicacao->jogo.cacador.pontos);
     }
     mostrar_tela(aplicacao, TELA_RESULTADO);
+}
+
+static unsigned efeito_restante(const Interface *aplicacao)
+{
+    if (!aplicacao->efeito_ativo) {
+        return 0;
+    }
+
+    DWORD decorrido = GetTickCount() - aplicacao->inicio_efeito;
+    return decorrido < DURACAO_EFEITO ? (unsigned)(DURACAO_EFEITO - decorrido) : 0;
+}
+
+static void mostrar_acao_de_combate(Interface *aplicacao)
+{
+    if (aplicacao->jogo.estado == JOGO_EM_COMBATE) {
+        aplicacao->inicio_efeito = GetTickCount();
+        aplicacao->efeito_ativo = SetTimer(aplicacao->janela, ID_TIMER_EFEITO, 20, NULL) != 0;
+    }
+    atualizar_partida(aplicacao);
 }
 
 static void iniciar_partida(Interface *aplicacao)
@@ -211,7 +264,7 @@ static void usar_pocao(Interface *aplicacao)
     LRESULT selecionado = SendMessageW(aplicacao->lista_itens, LB_GETCURSEL, 0, 0);
     if (selecionado != LB_ERR) {
         jogo_usar_item(&aplicacao->jogo, (size_t)selecionado + 1);
-        atualizar_partida(aplicacao);
+        mostrar_acao_de_combate(aplicacao);
     }
 }
 
@@ -241,13 +294,34 @@ static void acionar_botao(Interface *aplicacao, int id)
             break;
         case ID_ATACAR:
             jogo_atacar(&aplicacao->jogo);
-            atualizar_partida(aplicacao);
+            mostrar_acao_de_combate(aplicacao);
+            break;
+        case ID_DEFENDER:
+            jogo_defender(&aplicacao->jogo);
+            mostrar_acao_de_combate(aplicacao);
+            break;
+        case ID_SOMBRA:
+            jogo_invocar_sombra(&aplicacao->jogo);
+            mostrar_acao_de_combate(aplicacao);
             break;
         case ID_INVENTARIO:
             abrir_inventario(aplicacao);
             break;
         case ID_ABANDONAR:
+        case ID_RECUAR_PORTAL:
             jogo_abandonar(&aplicacao->jogo);
+            atualizar_partida(aplicacao);
+            break;
+        case ID_SEGUIR_TEMPLO:
+            jogo_escolher_portal(&aplicacao->jogo, false);
+            atualizar_partida(aplicacao);
+            break;
+        case ID_PASSAGEM:
+            if (aplicacao->jogo.portal_examinado) {
+                jogo_escolher_portal(&aplicacao->jogo, true);
+            } else {
+                jogo_examinar_portal(&aplicacao->jogo);
+            }
             atualizar_partida(aplicacao);
             break;
         case ID_USAR:
@@ -309,10 +383,23 @@ static LRESULT CALLBACK processar_janela(HWND janela, UINT mensagem, WPARAM para
             PAINTSTRUCT pintura;
             HDC contexto = BeginPaint(janela, &pintura);
             tela_pintar(janela, contexto, aplicacao->tela, &aplicacao->jogo,
-                        &aplicacao->ranking, aplicacao->nome, aplicacao->erro_nome);
+                        &aplicacao->ranking, aplicacao->nome, aplicacao->erro_nome,
+                        efeito_restante(aplicacao));
             EndPaint(janela, &pintura);
             return 0;
         }
+        case WM_TIMER:
+            if (parametro == ID_TIMER_EFEITO) {
+                if (efeito_restante(aplicacao) == 0 || aplicacao->tela != TELA_COMBATE) {
+                    KillTimer(janela, ID_TIMER_EFEITO);
+                    aplicacao->efeito_ativo = false;
+                }
+                if (aplicacao->tela == TELA_COMBATE) {
+                    InvalidateRect(janela, NULL, FALSE);
+                }
+                return 0;
+            }
+            break;
         case WM_ERASEBKGND:
             return 1;
         case WM_CTLCOLOREDIT:
@@ -341,11 +428,39 @@ static LRESULT CALLBACK processar_janela(HWND janela, UINT mensagem, WPARAM para
 
 static bool tratar_atalho(Interface *aplicacao, const MSG *mensagem)
 {
-    if (mensagem->message != WM_KEYDOWN || mensagem->wParam != VK_RETURN) {
+    if (mensagem->message != WM_KEYDOWN) {
         return false;
     }
+
+    bool repeticao = (mensagem->lParam & (1L << 30)) != 0;
+    if (aplicacao->tela == TELA_COMBATE) {
+        int id = 0;
+        switch (mensagem->wParam) {
+            case 'A': id = ID_ATACAR; break;
+            case 'D': id = ID_DEFENDER; break;
+            case 'E': id = ID_SOMBRA; break;
+            case 'I': id = ID_INVENTARIO; break;
+        }
+        if (id != 0) {
+            if (!repeticao) {
+                acionar_botao(aplicacao, id);
+            }
+            return true;
+        }
+    }
+
+    if (mensagem->wParam == VK_ESCAPE && aplicacao->tela == TELA_INVENTARIO) {
+        if (!repeticao) {
+            mostrar_tela(aplicacao, TELA_COMBATE);
+        }
+        return true;
+    }
+    if (mensagem->wParam != VK_RETURN) {
+        return false;
+    }
+
     /* Um Enter mantido pressionado nao deve consumir varios turnos. */
-    if ((mensagem->lParam & (1L << 30)) != 0) {
+    if (repeticao) {
         return true;
     }
 

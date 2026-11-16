@@ -2,7 +2,7 @@
 
 static void trocar(unsigned char *primeiro, unsigned char *segundo, size_t tamanho)
 {
-    /* A troca byte a byte serve tanto para inimigos quanto para pontuacoes. */
+    /* Trocar byte por byte deixa a gente usar o mesmo QuickSort pra inimigos e pontuações. */
     for (size_t byte = 0; byte < tamanho; ++byte) {
         unsigned char temporario = primeiro[byte];
         primeiro[byte] = segundo[byte];
@@ -16,7 +16,7 @@ static int particionar(unsigned char *vetor, int inicio, int fim, size_t tamanho
     unsigned char *pivo = vetor + (size_t)inicio * tamanho;
     int indice = fim;
 
-    /* Varre do fim para o inicio e leva para a direita os elementos >= ao pivo. */
+    /* Pelo comparador, quem vem depois do pivô ou empata com ele vai pra direita. */
     for (int atual = fim; atual > inicio; --atual) {
         unsigned char *elemento = vetor + (size_t)atual * tamanho;
         if (comparar(elemento, pivo) >= 0) {
