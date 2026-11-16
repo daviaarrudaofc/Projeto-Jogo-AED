@@ -3,12 +3,12 @@
 #include "ranking.h"
 
 #include <stdio.h>
-#include <string.h>
 
 static bool ler_nome(char nome[TAMANHO_NOME])
 {
     while (ler_texto("Nome do cacador: ", nome, TAMANHO_NOME)) {
-        if (nome[strspn(nome, " \t\r")] != '\0') {
+        char primeira_letra;
+        if (sscanf(nome, " %c", &primeira_letra) == 1) {
             return true;
         }
 

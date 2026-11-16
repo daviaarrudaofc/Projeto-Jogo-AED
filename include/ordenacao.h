@@ -1,9 +1,10 @@
 #ifndef ORDENACAO_H
 #define ORDENACAO_H
 
-#include <stddef.h>
+#include "fila.h"
+#include "ranking.h"
 
-void quicksort(void *vetor, int quantidade, size_t tamanho_elemento,
-               int (*comparar)(const void *, const void *));
+void quicksort_inimigos(Inimigo vetor[], int inicio, int fim);
+void quicksort_pontuacoes(Pontuacao vetor[], int inicio, int fim);
 
 #endif

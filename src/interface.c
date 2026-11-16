@@ -1,541 +1,481 @@
 #include "tela.h"
 
-#include <wchar.h>
+#include <stdio.h>
+#include <string.h>
 
-enum {
-    ID_NOME = 100,
-    ID_LISTA,
-    ID_INICIAR,
-    ID_RANKING,
-    ID_AJUDA,
-    ID_ATACAR,
-    ID_DEFENDER,
-    ID_SOMBRA,
-    ID_INVENTARIO,
-    ID_ABANDONAR,
-    ID_SEGUIR_TEMPLO,
-    ID_PASSAGEM,
-    ID_RECUAR_PORTAL,
-    ID_USAR,
-    ID_VOLTAR_COMBATE,
-    ID_VOLTAR_RANKING,
-    ID_VOLTAR_AJUDA,
-    ID_VOLTAR_MENU,
-    ID_RANKING_RESULTADO,
-    ID_TIMER_EFEITO = 1,
-    DURACAO_EFEITO = 260
-};
+const Rectangle AREA_MOVIMENTO = {64, 180, 868, 302};
+const Vector2 POSICAO_PORTAO = {800, 290};
+const Vector2 POSICAO_INSCRICAO = {244, 280};
+
+static const Rectangle CAMPO_NOME = {588, 241, 344, 48};
+static const float DURACAO_ACAO = 0.28f;
+
+typedef enum {
+    SEM_COMANDO, INICIAR, MOSTRAR_RANKING, MOSTRAR_AJUDA, ATACAR, DEFENDER,
+    INVOCAR, ABRIR_INVENTARIO, USAR_ITEM, RECUAR, VOLTAR, VOLTAR_COMBATE
+} Comando;
 
 typedef struct {
-    int id;
-    TelaJogo tela;
-    TipoBotao tipo;
-    const wchar_t *texto;
-    int x, y, largura, altura;
-} ConfigBotao;
+    Comando comando;
+    size_t posicao_item;
+} Acao;
 
-static const ConfigBotao configuracoes[] = {
-    {ID_INICIAR, TELA_MENU, BOTAO_PRIMARIO, L"Iniciar ca\u00e7a", 552, 275, 312, 48},
-    {ID_RANKING, TELA_MENU, BOTAO_SECUNDARIO, L"Ranking", 552, 335, 150, 42},
-    {ID_AJUDA, TELA_MENU, BOTAO_SECUNDARIO, L"Como jogar", 714, 335, 150, 42},
-    {ID_ATACAR, TELA_COMBATE, BOTAO_PRIMARIO, L"A \u00b7 Atacar", 40, 518, 160, 46},
-    {ID_DEFENDER, TELA_COMBATE, BOTAO_SECUNDARIO, L"D \u00b7 Defender", 210, 518, 160, 46},
-    {ID_SOMBRA, TELA_COMBATE, BOTAO_SECUNDARIO, L"E \u00b7 Erga-se", 380, 518, 160, 46},
-    {ID_INVENTARIO, TELA_COMBATE, BOTAO_SECUNDARIO, L"I \u00b7 Invent\u00e1rio", 550, 518, 160, 46},
-    {ID_ABANDONAR, TELA_COMBATE, BOTAO_PERIGO, L"Recuar", 720, 518, 160, 46},
-    {ID_SEGUIR_TEMPLO, TELA_PORTAL, BOTAO_SECUNDARIO, L"Seguir ao templo", 40, 518, 270, 46},
-    {ID_PASSAGEM, TELA_PORTAL, BOTAO_PRIMARIO, L"Examinar inscri\u00e7\u00e3o", 324, 518, 270, 46},
-    {ID_RECUAR_PORTAL, TELA_PORTAL, BOTAO_PERIGO, L"Recuar", 610, 518, 270, 46},
-    {ID_USAR, TELA_INVENTARIO, BOTAO_PRIMARIO, L"Usar po\u00e7\u00e3o", 40, 518, 270, 46},
-    {ID_VOLTAR_COMBATE, TELA_INVENTARIO, BOTAO_SECUNDARIO, L"Voltar ao combate", 324, 518, 270, 46},
-    {ID_VOLTAR_RANKING, TELA_RANKING, BOTAO_SECUNDARIO, L"Voltar", 40, 518, 270, 46},
-    {ID_VOLTAR_AJUDA, TELA_AJUDA, BOTAO_SECUNDARIO, L"Voltar ao menu", 40, 518, 270, 46},
-    {ID_VOLTAR_MENU, TELA_RESULTADO, BOTAO_PRIMARIO, L"Voltar ao menu", 40, 518, 270, 46},
-    {ID_RANKING_RESULTADO, TELA_RESULTADO, BOTAO_SECUNDARIO, L"Ver ranking", 324, 518, 270, 46}
-};
-
-enum { QUANTIDADE_BOTOES = sizeof configuracoes / sizeof configuracoes[0] };
+enum { LIMITE_BOTOES = 8 };
 
 typedef struct {
-    HWND janela;
-    HWND campo_nome;
-    HWND lista_itens;
-    HWND botoes[QUANTIDADE_BOTOES];
-    HFONT fonte;
-    HBRUSH fundo_campo;
     TelaJogo tela;
-    TelaJogo voltar_do_ranking;
+    TelaJogo retorno_ranking;
     Jogo jogo;
-    bool partida_iniciada;
     Ranking ranking;
-    wchar_t nome[TAMANHO_NOME];
-    char nome_utf8[TAMANHO_NOME];
-    const wchar_t *erro_nome;
-    DWORD inicio_efeito;
-    bool efeito_ativo;
+    Personagem personagem;
+    AlvoExploracao perto;
+    char nome[TAMANHO_NOME];
+    const char *aviso;
+    BotaoTela botoes[LIMITE_BOTOES];
+    Acao acoes[LIMITE_BOTOES];
+    char nomes_itens[LIMITE_BOTOES - 1][64];
+    size_t quantidade_botoes;
+    int foco;
+    EfeitoTela efeito;
+    float tempo_acao;
+    Acao acao_pendente;
 } Interface;
 
-static bool criar_controles(Interface *aplicacao, HINSTANCE instancia)
+static void ir_para(Interface *interface, TelaJogo tela)
 {
-    aplicacao->fundo_campo = CreateSolidBrush(COR_CAMPO);
-    aplicacao->fonte = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                  CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    if (aplicacao->fundo_campo == NULL || aplicacao->fonte == NULL) {
-        return false;
+    interface->tela = tela;
+    interface->foco = -1;
+    interface->aviso = NULL;
+    interface->perto = ALVO_NENHUM;
+
+    if (tela == TELA_ENTRADA || tela == TELA_PORTAL) {
+        Vector2 ponto_inicial = tela == TELA_ENTRADA ? (Vector2){134, 407} : (Vector2){484, 407};
+        personagem_reiniciar(&interface->personagem, ponto_inicial, 1);
     }
-
-    HWND janela = aplicacao->janela;
-    aplicacao->campo_nome = CreateWindowExW(0, L"EDIT", L"",
-        WS_CHILD | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
-        552, 219, 312, 36, janela, (HMENU)(INT_PTR)ID_NOME, instancia, NULL);
-    aplicacao->lista_itens = CreateWindowExW(0, L"LISTBOX", L"",
-        WS_CHILD | WS_TABSTOP | WS_BORDER | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY,
-        62, 156, 796, 290, janela, (HMENU)(INT_PTR)ID_LISTA, instancia, NULL);
-    if (aplicacao->campo_nome == NULL || aplicacao->lista_itens == NULL) {
-        return false;
-    }
-
-    SendMessageW(aplicacao->campo_nome, EM_SETLIMITTEXT, TAMANHO_NOME - 1, 0);
-    SendMessageW(aplicacao->campo_nome, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                 MAKELPARAM(10, 10));
-    SendMessageW(aplicacao->campo_nome, WM_SETFONT, (WPARAM)aplicacao->fonte, FALSE);
-    SendMessageW(aplicacao->lista_itens, WM_SETFONT, (WPARAM)aplicacao->fonte, FALSE);
-
-    for (int indice = 0; indice < QUANTIDADE_BOTOES; ++indice) {
-        const ConfigBotao *config = &configuracoes[indice];
-        aplicacao->botoes[indice] = CreateWindowExW(0, L"BUTTON", config->texto,
-            WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, config->x, config->y,
-            config->largura, config->altura, janela, (HMENU)(INT_PTR)config->id,
-            instancia, NULL);
-        if (aplicacao->botoes[indice] == NULL) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
-static void mostrar_tela(Interface *aplicacao, TelaJogo tela)
+static void voltar_para_menu(Interface *interface)
 {
-    HWND foco_anterior = GetFocus();
-    bool manter_foco = false;
-    aplicacao->tela = tela;
-    bool tem_itens = tela == TELA_INVENTARIO &&
-                     inventario_quantidade(&aplicacao->jogo.cacador.inventario) > 0;
-    HWND foco = NULL;
-
-    ShowWindow(aplicacao->campo_nome, tela == TELA_MENU ? SW_SHOW : SW_HIDE);
-    ShowWindow(aplicacao->lista_itens, tem_itens ? SW_SHOW : SW_HIDE);
-
-    if (tela == TELA_MENU) {
-        foco = aplicacao->campo_nome;
-    } else if (tem_itens) {
-        foco = aplicacao->lista_itens;
-    }
-    manter_foco = foco != NULL && foco == foco_anterior;
-
-    for (int indice = 0; indice < QUANTIDADE_BOTOES; ++indice) {
-        const ConfigBotao *config = &configuracoes[indice];
-        HWND botao = aplicacao->botoes[indice];
-        bool visivel = config->tela == tela;
-        bool habilitado = (config->id != ID_USAR || tem_itens) &&
-                          (config->id != ID_SOMBRA || aplicacao->jogo.cacador.essencia > 0);
-
-        if (visivel && config->id == ID_PASSAGEM) {
-            SetWindowTextW(botao, aplicacao->jogo.portal_examinado ?
-                           L"Entrar na passagem" : L"Examinar inscri\u00e7\u00e3o");
-        }
-
-        EnableWindow(botao, habilitado);
-        ShowWindow(botao, visivel ? SW_SHOW : SW_HIDE);
-        if (visivel && habilitado) {
-            if (foco == NULL) {
-                foco = botao;
-            }
-            if (botao == foco_anterior) {
-                manter_foco = true;
-            }
-        }
-    }
-
-    if (!manter_foco) {
-        SetFocus(foco);
-    }
-    InvalidateRect(aplicacao->janela, NULL, FALSE);
+    jogo_limpar(&interface->jogo);
+    ir_para(interface, TELA_MENU);
 }
 
-static void atualizar_partida(Interface *aplicacao)
+static void atualizar_partida(Interface *interface)
 {
-    EstadoJogo estado = aplicacao->jogo.estado;
-    if (estado == JOGO_EM_COMBATE) {
-        mostrar_tela(aplicacao, TELA_COMBATE);
-        return;
+    switch (interface->jogo.estado) {
+        case JOGO_EM_COMBATE:
+            if (interface->tela != TELA_COMBATE) {
+                ir_para(interface, TELA_COMBATE);
+            }
+            return;
+        case JOGO_PORTAL:
+            ir_para(interface, TELA_PORTAL);
+            return;
+        case JOGO_VITORIA:
+        case JOGO_DERROTA:
+            ranking_registrar(&interface->ranking, interface->nome, interface->jogo.cacador.pontos);
+            break;
+        case JOGO_ABANDONADO:
+        case JOGO_ERRO:
+            break;
     }
-    if (estado == JOGO_PORTAL) {
-        mostrar_tela(aplicacao, TELA_PORTAL);
+    ir_para(interface, TELA_RESULTADO);
+}
+
+static void iniciar_partida(Interface *interface)
+{
+    char primeira_letra;
+    if (sscanf(interface->nome, " %c", &primeira_letra) != 1) {
+        interface->foco = -1;
+        interface->aviso = "Digite o nome do caçador.";
         return;
     }
 
-    if (estado == JOGO_VITORIA || estado == JOGO_DERROTA) {
-        ranking_registrar(&aplicacao->ranking, aplicacao->nome_utf8,
-                         aplicacao->jogo.cacador.pontos);
-    }
-    mostrar_tela(aplicacao, TELA_RESULTADO);
-}
-
-static unsigned efeito_restante(const Interface *aplicacao)
-{
-    if (!aplicacao->efeito_ativo) {
-        return 0;
-    }
-
-    DWORD decorrido = GetTickCount() - aplicacao->inicio_efeito;
-    return decorrido < DURACAO_EFEITO ? (unsigned)(DURACAO_EFEITO - decorrido) : 0;
-}
-
-static void mostrar_acao_de_combate(Interface *aplicacao)
-{
-    if (aplicacao->jogo.estado == JOGO_EM_COMBATE) {
-        aplicacao->inicio_efeito = GetTickCount();
-        aplicacao->efeito_ativo = SetTimer(aplicacao->janela, ID_TIMER_EFEITO, 20, NULL) != 0;
-    }
-    atualizar_partida(aplicacao);
-}
-
-static void iniciar_partida(Interface *aplicacao)
-{
-    wchar_t nome[TAMANHO_NOME] = {0};
-    GetWindowTextW(aplicacao->campo_nome, nome, TAMANHO_NOME);
-    const wchar_t *comeco = nome + wcsspn(nome, L" \t");
-    if (*comeco == L'\0') {
-        aplicacao->erro_nome = L"Digite um nome para seu ca\u00e7ador.";
-    } else if (WideCharToMultiByte(CP_UTF8, 0, comeco, -1, aplicacao->nome_utf8,
-                                   TAMANHO_NOME, NULL, NULL) == 0) {
-        aplicacao->erro_nome = L"Escolha um nome mais curto.";
+    if (jogo_iniciar(&interface->jogo)) {
+        ir_para(interface, TELA_ENTRADA);
     } else {
-        wcscpy(aplicacao->nome, comeco);
-        aplicacao->erro_nome = NULL;
-        aplicacao->partida_iniciada = true;
-        jogo_iniciar(&aplicacao->jogo);
-        atualizar_partida(aplicacao);
-        return;
+        atualizar_partida(interface);
     }
-
-    SetFocus(aplicacao->campo_nome);
-    InvalidateRect(aplicacao->janela, NULL, FALSE);
 }
 
-static void voltar_ao_menu(Interface *aplicacao)
+static void adicionar_botao(Interface *interface, Rectangle area, const char *texto,
+                            TipoBotao tipo, bool habilitado, Comando comando, size_t posicao)
 {
-    if (aplicacao->partida_iniciada) {
-        jogo_limpar(&aplicacao->jogo);
-        aplicacao->partida_iniciada = false;
-    }
-    mostrar_tela(aplicacao, TELA_MENU);
+    size_t indice = interface->quantidade_botoes++;
+    interface->botoes[indice] = (BotaoTela){area, texto, tipo, habilitado,
+                                          habilitado && interface->foco == (int)indice};
+    interface->acoes[indice] = (Acao){comando, posicao};
 }
 
-static void abrir_inventario(Interface *aplicacao)
+static void adicionar_itens(Interface *interface)
 {
-    HWND lista = aplicacao->lista_itens;
-    SendMessageW(lista, LB_RESETCONTENT, 0, 0);
-
-    const Inventario *inventario = &aplicacao->jogo.cacador.inventario;
-    size_t quantidade = inventario_quantidade(inventario);
-    for (size_t posicao = 1; posicao <= quantidade; ++posicao) {
+    const Inventario *inventario = &interface->jogo.cacador.inventario;
+    size_t total = inventario_quantidade(inventario);
+    for (size_t posicao = 1; posicao <= total && posicao < LIMITE_BOTOES; ++posicao) {
         Item item;
         if (inventario_buscar(inventario, posicao, &item)) {
-            wchar_t nome_item[48] = {0};
-            MultiByteToWideChar(CP_UTF8, 0, item.nome, -1, nome_item,
-                                sizeof nome_item / sizeof nome_item[0]);
-            wchar_t texto[96];
-            _snwprintf(texto, sizeof texto / sizeof texto[0],
-                       L"  %u. %ls  (+%d PV)", (unsigned)posicao, nome_item, item.cura);
-            SendMessageW(lista, LB_ADDSTRING, 0, (LPARAM)texto);
+            char *texto = interface->nomes_itens[posicao - 1];
+            snprintf(texto, sizeof interface->nomes_itens[0], "%s  |  +%d PV", item.nome, item.cura);
+            Rectangle area = {60, 142 + 53 * (float)(posicao - 1), 880, 42};
+            adicionar_botao(interface, area, texto, BOTAO_SECUNDARIO, true, USAR_ITEM, posicao);
         }
     }
-
-    SendMessageW(lista, LB_SETCURSEL, 0, 0);
-    mostrar_tela(aplicacao, TELA_INVENTARIO);
 }
 
-static void usar_pocao(Interface *aplicacao)
+static void montar_botoes(Interface *interface)
 {
-    LRESULT selecionado = SendMessageW(aplicacao->lista_itens, LB_GETCURSEL, 0, 0);
-    if (selecionado != LB_ERR) {
-        jogo_usar_item(&aplicacao->jogo, (size_t)selecionado + 1);
-        mostrar_acao_de_combate(aplicacao);
-    }
-}
+    interface->quantidade_botoes = 0;
+    const Rectangle primeiro = {40, 568, 246, 46};
+    const Rectangle segundo = {300, 568, 246, 46};
+    const Rectangle ultimo = {760, 568, 200, 46};
 
-static const ConfigBotao *buscar_botao(int id)
-{
-    for (int indice = 0; indice < QUANTIDADE_BOTOES; ++indice) {
-        if (configuracoes[indice].id == id) {
-            return &configuracoes[indice];
+    switch (interface->tela) {
+        case TELA_MENU:
+            adicionar_botao(interface, (Rectangle){588, 302, 344, 48}, "Iniciar caça",
+                            BOTAO_PRIMARIO, true, INICIAR, 0);
+            adicionar_botao(interface, (Rectangle){588, 364, 168, 40}, "Ranking",
+                            BOTAO_SECUNDARIO, true, MOSTRAR_RANKING, 0);
+            adicionar_botao(interface, (Rectangle){764, 364, 168, 40}, "Como jogar",
+                            BOTAO_SECUNDARIO, true, MOSTRAR_AJUDA, 0);
+            break;
+        case TELA_ENTRADA:
+        case TELA_PORTAL:
+            adicionar_botao(interface, ultimo, "Recuar", BOTAO_PERIGO, true, RECUAR, 0);
+            break;
+        case TELA_COMBATE: {
+            const char *nomes[] = {"A  Atacar", "D  Defender", "E  Erga-se", "I  Inventário", "Recuar"};
+            const Comando comandos[] = {ATACAR, DEFENDER, INVOCAR, ABRIR_INVENTARIO, RECUAR};
+            const TipoBotao tipos[] = {BOTAO_PRIMARIO, BOTAO_SECUNDARIO, BOTAO_SECUNDARIO,
+                                       BOTAO_SECUNDARIO, BOTAO_PERIGO};
+            for (size_t indice = 0; indice < sizeof comandos / sizeof comandos[0]; ++indice) {
+                Rectangle area = {40 + 186 * (float)indice, 568, 176, 46};
+                bool habilitado = interface->acao_pendente.comando == SEM_COMANDO &&
+                    (comandos[indice] != INVOCAR || interface->jogo.cacador.essencia > 0);
+                adicionar_botao(interface, area, nomes[indice], tipos[indice], habilitado,
+                                comandos[indice], 0);
+            }
+            break;
         }
+        case TELA_INVENTARIO:
+            adicionar_itens(interface);
+            adicionar_botao(interface, primeiro, "Voltar ao combate", BOTAO_SECUNDARIO,
+                            true, VOLTAR_COMBATE, 0);
+            break;
+        case TELA_RANKING:
+        case TELA_AJUDA:
+            adicionar_botao(interface, primeiro, "Voltar", BOTAO_SECUNDARIO, true, VOLTAR, 0);
+            break;
+        case TELA_RESULTADO:
+            adicionar_botao(interface, primeiro, "Voltar ao menu", BOTAO_PRIMARIO, true, VOLTAR, 0);
+            adicionar_botao(interface, segundo, "Ver ranking", BOTAO_SECUNDARIO, true, MOSTRAR_RANKING, 0);
+            break;
     }
-    return NULL;
 }
 
-static void acionar_botao(Interface *aplicacao, int id)
+static void preparar_acao(Interface *interface, Acao acao, EfeitoTela efeito)
 {
-    switch (id) {
-        case ID_INICIAR:
-            iniciar_partida(aplicacao);
+    if (interface->tela == TELA_INVENTARIO) {
+        ir_para(interface, TELA_COMBATE);
+    }
+    interface->acao_pendente = acao;
+    interface->efeito = efeito;
+    interface->tempo_acao = 0;
+}
+
+static void executar_acao(Interface *interface, Acao acao)
+{
+    switch (acao.comando) {
+        case INICIAR:
+            iniciar_partida(interface);
             break;
-        case ID_RANKING:
-        case ID_RANKING_RESULTADO:
-            aplicacao->voltar_do_ranking = aplicacao->tela;
-            mostrar_tela(aplicacao, TELA_RANKING);
+        case MOSTRAR_RANKING:
+            interface->retorno_ranking = interface->tela;
+            ir_para(interface, TELA_RANKING);
             break;
-        case ID_AJUDA:
-            mostrar_tela(aplicacao, TELA_AJUDA);
+        case MOSTRAR_AJUDA:
+            ir_para(interface, TELA_AJUDA);
             break;
-        case ID_ATACAR:
-            jogo_atacar(&aplicacao->jogo);
-            mostrar_acao_de_combate(aplicacao);
+        case ATACAR:
+            preparar_acao(interface, acao, EFEITO_ATAQUE);
             break;
-        case ID_DEFENDER:
-            jogo_defender(&aplicacao->jogo);
-            mostrar_acao_de_combate(aplicacao);
+        case DEFENDER:
+            preparar_acao(interface, acao, EFEITO_DEFESA);
             break;
-        case ID_SOMBRA:
-            jogo_invocar_sombra(&aplicacao->jogo);
-            mostrar_acao_de_combate(aplicacao);
-            break;
-        case ID_INVENTARIO:
-            abrir_inventario(aplicacao);
-            break;
-        case ID_ABANDONAR:
-        case ID_RECUAR_PORTAL:
-            jogo_abandonar(&aplicacao->jogo);
-            atualizar_partida(aplicacao);
-            break;
-        case ID_SEGUIR_TEMPLO:
-            jogo_escolher_portal(&aplicacao->jogo, false);
-            atualizar_partida(aplicacao);
-            break;
-        case ID_PASSAGEM:
-            if (aplicacao->jogo.portal_examinado) {
-                jogo_escolher_portal(&aplicacao->jogo, true);
+        case INVOCAR:
+            if (interface->jogo.cacador.essencia == 0) {
+                jogo_invocar_sombra(&interface->jogo);
             } else {
-                jogo_examinar_portal(&aplicacao->jogo);
+                preparar_acao(interface, acao, EFEITO_SOMBRA);
             }
-            atualizar_partida(aplicacao);
             break;
-        case ID_USAR:
-            usar_pocao(aplicacao);
+        case ABRIR_INVENTARIO:
+            ir_para(interface, TELA_INVENTARIO);
             break;
-        case ID_VOLTAR_COMBATE:
-            mostrar_tela(aplicacao, TELA_COMBATE);
+        case USAR_ITEM:
+            preparar_acao(interface, acao, EFEITO_POCAO);
             break;
-        case ID_VOLTAR_RANKING:
-            mostrar_tela(aplicacao, aplicacao->voltar_do_ranking);
+        case RECUAR:
+            jogo_abandonar(&interface->jogo);
+            atualizar_partida(interface);
             break;
-        case ID_VOLTAR_AJUDA:
-        case ID_VOLTAR_MENU:
-            voltar_ao_menu(aplicacao);
+        case VOLTAR:
+            if (interface->tela == TELA_RANKING) {
+                ir_para(interface, interface->retorno_ranking);
+            } else {
+                voltar_para_menu(interface);
+            }
+            break;
+        case VOLTAR_COMBATE:
+            ir_para(interface, TELA_COMBATE);
+            break;
+        case SEM_COMANDO:
             break;
     }
 }
 
-static void tratar_comando(Interface *aplicacao, int id, int aviso)
+static void atualizar_acao(Interface *interface, float segundos)
 {
-    if (id == ID_NOME && aviso == EN_CHANGE && aplicacao->erro_nome != NULL) {
-        aplicacao->erro_nome = NULL;
-        InvalidateRect(aplicacao->janela, NULL, FALSE);
-    } else if (id == ID_LISTA && aviso == LBN_DBLCLK && aplicacao->tela == TELA_INVENTARIO) {
-        usar_pocao(aplicacao);
-    } else if (aviso == BN_CLICKED) {
-        const ConfigBotao *config = buscar_botao(id);
-        if (config != NULL && config->tela == aplicacao->tela) {
-            acionar_botao(aplicacao, id);
+    Acao acao = interface->acao_pendente;
+    if (acao.comando == SEM_COMANDO) {
+        return;
+    }
+
+    interface->tempo_acao += segundos;
+    if (interface->tempo_acao < DURACAO_ACAO) {
+        return;
+    }
+
+    switch (acao.comando) {
+        case ATACAR: jogo_atacar(&interface->jogo); break;
+        case DEFENDER: jogo_defender(&interface->jogo); break;
+        case INVOCAR: jogo_invocar_sombra(&interface->jogo); break;
+        case USAR_ITEM: jogo_usar_item(&interface->jogo, acao.posicao_item); break;
+        default: break;
+    }
+
+    interface->acao_pendente = (Acao){SEM_COMANDO, 0};
+    interface->efeito = EFEITO_NENHUM;
+    interface->tempo_acao = 0;
+    atualizar_partida(interface);
+}
+
+static void ler_nome(Interface *interface)
+{
+    size_t tamanho = strlen(interface->nome);
+    if (tamanho > 0 && IsKeyPressed(KEY_BACKSPACE)) {
+        int bytes_letra;
+        GetCodepointPrevious(interface->nome + tamanho, &bytes_letra);
+        tamanho -= (size_t)bytes_letra;
+        interface->nome[tamanho] = '\0';
+        interface->aviso = NULL;
+    }
+
+    for (int letra = GetCharPressed(); letra != 0; letra = GetCharPressed()) {
+        int bytes;
+        const char *texto = CodepointToUTF8(letra, &bytes);
+        if (letra >= 32 && tamanho + (size_t)bytes < sizeof interface->nome) {
+            memcpy(interface->nome + tamanho, texto, (size_t)bytes);
+            tamanho += (size_t)bytes;
+            interface->nome[tamanho] = '\0';
+            interface->aviso = NULL;
         }
     }
 }
 
-static LRESULT CALLBACK processar_janela(HWND janela, UINT mensagem, WPARAM parametro,
-                                        LPARAM dados)
+static AlvoExploracao localizar_alvo(const Interface *interface)
 {
-    if (mensagem == WM_NCCREATE) {
-        const CREATESTRUCTW *criacao = (const CREATESTRUCTW *)dados;
-        Interface *aplicacao = criacao->lpCreateParams;
-        aplicacao->janela = janela;
-        SetWindowLongPtrW(janela, GWLP_USERDATA, (LONG_PTR)aplicacao);
-        return DefWindowProcW(janela, mensagem, parametro, dados);
+    Vector2 posicao = interface->personagem.posicao;
+    if (CheckCollisionPointCircle(posicao, POSICAO_PORTAO, DISTANCIA_INTERACAO)) {
+        return ALVO_PORTAO;
     }
-
-    Interface *aplicacao = (Interface *)GetWindowLongPtrW(janela, GWLP_USERDATA);
-    if (aplicacao == NULL) {
-        return DefWindowProcW(janela, mensagem, parametro, dados);
+    if (interface->tela == TELA_PORTAL &&
+        CheckCollisionPointCircle(posicao, POSICAO_INSCRICAO, DISTANCIA_INTERACAO)) {
+        return ALVO_INSCRICAO;
     }
-
-    switch (mensagem) {
-        case WM_CREATE: {
-            const CREATESTRUCTW *criacao = (const CREATESTRUCTW *)dados;
-            return criar_controles(aplicacao, criacao->hInstance) ? 0 : -1;
-        }
-        case WM_COMMAND:
-            tratar_comando(aplicacao, LOWORD(parametro), HIWORD(parametro));
-            return 0;
-        case WM_PAINT: {
-            PAINTSTRUCT pintura;
-            HDC contexto = BeginPaint(janela, &pintura);
-            tela_pintar(janela, contexto, aplicacao->tela, &aplicacao->jogo,
-                        &aplicacao->ranking, aplicacao->nome, aplicacao->erro_nome,
-                        efeito_restante(aplicacao));
-            EndPaint(janela, &pintura);
-            return 0;
-        }
-        case WM_TIMER:
-            if (parametro == ID_TIMER_EFEITO) {
-                if (efeito_restante(aplicacao) == 0 || aplicacao->tela != TELA_COMBATE) {
-                    KillTimer(janela, ID_TIMER_EFEITO);
-                    aplicacao->efeito_ativo = false;
-                }
-                if (aplicacao->tela == TELA_COMBATE) {
-                    InvalidateRect(janela, NULL, FALSE);
-                }
-                return 0;
-            }
-            break;
-        case WM_ERASEBKGND:
-            return 1;
-        case WM_CTLCOLOREDIT:
-        case WM_CTLCOLORLISTBOX: {
-            HDC contexto = (HDC)parametro;
-            SetTextColor(contexto, COR_TEXTO);
-            SetBkColor(contexto, COR_CAMPO);
-            return (LRESULT)aplicacao->fundo_campo;
-        }
-        case WM_DRAWITEM: {
-            const DRAWITEMSTRUCT *item = (const DRAWITEMSTRUCT *)dados;
-            const ConfigBotao *config = buscar_botao((int)item->CtlID);
-            if (config != NULL) {
-                tela_desenhar_botao(item, config->tipo);
-                return TRUE;
-            }
-            break;
-        }
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
-    }
-
-    return DefWindowProcW(janela, mensagem, parametro, dados);
+    return ALVO_NENHUM;
 }
 
-static bool tratar_atalho(Interface *aplicacao, const MSG *mensagem)
+static void interagir(Interface *interface)
 {
-    if (mensagem->message != WM_KEYDOWN) {
-        return false;
+    if (interface->perto == ALVO_NENHUM) {
+        interface->aviso = "Chegue mais perto para interagir.";
+    } else if (interface->tela == TELA_ENTRADA) {
+        ir_para(interface, TELA_COMBATE);
+    } else if (interface->perto == ALVO_PORTAO) {
+        jogo_escolher_portal(&interface->jogo, false);
+        atualizar_partida(interface);
+    } else if (!interface->jogo.portal_examinado) {
+        jogo_examinar_portal(&interface->jogo);
+    } else {
+        jogo_escolher_portal(&interface->jogo, true);
+        atualizar_partida(interface);
     }
+}
 
-    bool repeticao = (mensagem->lParam & (1L << 30)) != 0;
-    if (aplicacao->tela == TELA_COMBATE) {
-        int id = 0;
-        switch (mensagem->wParam) {
-            case 'A': id = ID_ATACAR; break;
-            case 'D': id = ID_DEFENDER; break;
-            case 'E': id = ID_SOMBRA; break;
-            case 'I': id = ID_INVENTARIO; break;
-        }
-        if (id != 0) {
-            if (!repeticao) {
-                acionar_botao(aplicacao, id);
+static void explorar(Interface *interface, float segundos)
+{
+    int direita = IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D);
+    int esquerda = IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A);
+    int baixo = IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S);
+    int cima = IsKeyDown(KEY_UP) || IsKeyDown(KEY_W);
+    Vector2 eixo = {(float)(direita - esquerda), (float)(baixo - cima)};
+    personagem_mover(&interface->personagem, eixo, segundos, AREA_MOVIMENTO);
+    interface->perto = localizar_alvo(interface);
+    if (interface->perto != ALVO_NENHUM) {
+        interface->aviso = NULL;
+    }
+    if (IsKeyPressed(KEY_F)) {
+        interagir(interface);
+    }
+}
+
+static bool processar_mouse(Interface *interface)
+{
+    Vector2 mouse = GetMousePosition();
+    for (size_t indice = 0; indice < interface->quantidade_botoes; ++indice) {
+        BotaoTela *botao = &interface->botoes[indice];
+        if (botao->habilitado && CheckCollisionPointRec(mouse, botao->area)) {
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                interface->foco = (int)indice;
+                executar_acao(interface, interface->acoes[indice]);
+                return true;
             }
-            return true;
+            break;
         }
     }
-
-    if (mensagem->wParam == VK_ESCAPE && aplicacao->tela == TELA_INVENTARIO) {
-        if (!repeticao) {
-            mostrar_tela(aplicacao, TELA_COMBATE);
-        }
-        return true;
-    }
-    if (mensagem->wParam != VK_RETURN) {
-        return false;
-    }
-
-    /* Um Enter mantido pressionado nao deve consumir varios turnos. */
-    if (repeticao) {
-        return true;
-    }
-
-    if (mensagem->hwnd == aplicacao->campo_nome && aplicacao->tela == TELA_MENU) {
-        iniciar_partida(aplicacao);
-        return true;
-    }
-    if (mensagem->hwnd == aplicacao->lista_itens && aplicacao->tela == TELA_INVENTARIO) {
-        usar_pocao(aplicacao);
-        return true;
-    }
-
-    const ConfigBotao *config = buscar_botao(GetDlgCtrlID(mensagem->hwnd));
-    if (config != NULL && config->tela == aplicacao->tela) {
-        SendMessageW(mensagem->hwnd, BM_CLICK, 0, 0);
-        return true;
+    if (interface->tela == TELA_MENU && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+        CheckCollisionPointRec(mouse, CAMPO_NOME)) {
+        interface->foco = -1;
     }
     return false;
 }
 
-int WINAPI WinMain(HINSTANCE instancia, HINSTANCE anterior, LPSTR linha_comando, int modo)
+static void avancar_foco(Interface *interface)
 {
-    (void)anterior;
-    (void)linha_comando;
+    int total = (int)interface->quantidade_botoes;
+    int proximo = interface->foco;
+    for (int tentativa = 0; tentativa <= total; ++tentativa) {
+        ++proximo;
+        if (proximo >= total) {
+            if (interface->tela == TELA_MENU) {
+                interface->foco = -1;
+                return;
+            }
+            proximo = 0;
+        }
+        if (interface->botoes[proximo].habilitado) {
+            interface->foco = proximo;
+            return;
+        }
+    }
+}
 
-    const wchar_t classe[] = L"DungeonQuestJanela";
-    WNDCLASSW configuracao = {0};
-    configuracao.lpfnWndProc = processar_janela;
-    configuracao.hInstance = instancia;
-    configuracao.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
-    configuracao.lpszClassName = classe;
-    if (!RegisterClassW(&configuracao)) {
-        MessageBoxW(NULL, L"A janela do jogo n\u00e3o p\u00f4de ser registrada.",
-                    L"Dungeon Quest", MB_OK | MB_ICONERROR);
+static bool processar_teclado(Interface *interface)
+{
+    if (IsKeyPressed(KEY_TAB)) {
+        avancar_foco(interface);
+    }
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        if (interface->tela == TELA_INVENTARIO) {
+            ir_para(interface, TELA_COMBATE);
+        } else if (interface->tela == TELA_RANKING || interface->tela == TELA_AJUDA) {
+            executar_acao(interface, (Acao){VOLTAR, 0});
+        }
+        return true;
+    }
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
+        int foco = interface->foco;
+        if (foco >= 0 && foco < (int)interface->quantidade_botoes && interface->botoes[foco].habilitado) {
+            executar_acao(interface, interface->acoes[foco]);
+            return true;
+        }
+        if (interface->tela == TELA_MENU) {
+            iniciar_partida(interface);
+            return true;
+        }
+    }
+    if (interface->tela != TELA_COMBATE) {
+        return false;
+    }
+
+    Comando comando = SEM_COMANDO;
+    if (IsKeyPressed(KEY_A)) comando = ATACAR;
+    else if (IsKeyPressed(KEY_D)) comando = DEFENDER;
+    else if (IsKeyPressed(KEY_E)) comando = INVOCAR;
+    else if (IsKeyPressed(KEY_I)) comando = ABRIR_INVENTARIO;
+    executar_acao(interface, (Acao){comando, 0});
+    return comando != SEM_COMANDO;
+}
+
+static void atualizar_interface(Interface *interface, float segundos)
+{
+    if (interface->acao_pendente.comando != SEM_COMANDO) {
+        atualizar_acao(interface, segundos);
+        return;
+    }
+
+    montar_botoes(interface);
+    if (processar_mouse(interface) || processar_teclado(interface)) {
+        return;
+    }
+    if (interface->tela == TELA_MENU && interface->foco == -1) {
+        ler_nome(interface);
+    } else if (interface->tela == TELA_ENTRADA || interface->tela == TELA_PORTAL) {
+        explorar(interface, segundos);
+    }
+}
+
+static void desenhar_interface(Interface *interface, float tempo)
+{
+    montar_botoes(interface);
+    Vector2 mouse = GetMousePosition();
+    for (size_t indice = 0; indice < interface->quantidade_botoes; ++indice) {
+        BotaoTela *botao = &interface->botoes[indice];
+        if (botao->habilitado && CheckCollisionPointRec(mouse, botao->area)) {
+            botao->selecionado = true;
+        }
+    }
+
+    QuadroTela quadro = {
+        .tela = interface->tela,
+        .jogo = &interface->jogo,
+        .ranking = &interface->ranking,
+        .nome = interface->nome,
+        .aviso = interface->aviso,
+        .editando_nome = interface->foco == -1,
+        .personagem = &interface->personagem,
+        .perto = interface->perto,
+        .efeito = interface->efeito,
+        .progresso_efeito = interface->tempo_acao / DURACAO_ACAO,
+        .tempo = tempo,
+        .botoes = interface->botoes,
+        .quantidade_botoes = interface->quantidade_botoes
+    };
+    tela_desenhar(&quadro);
+}
+
+int main(void)
+{
+    SetTraceLogLevel(LOG_WARNING);
+    SetConfigFlags(FLAG_VSYNC_HINT);
+    InitWindow(LARGURA_TELA, ALTURA_TELA, "Solo Leveling: Dungeon Quest");
+    if (!IsWindowReady()) {
         return 1;
     }
 
-    Interface aplicacao = {0};
-    DWORD estilo = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-    RECT tamanho = {0, 0, LARGURA_TELA, ALTURA_TELA};
-    AdjustWindowRect(&tamanho, estilo, FALSE);
+    SetTargetFPS(60);
+    SetExitKey(KEY_NULL);
 
-    HWND janela = CreateWindowExW(WS_EX_CONTROLPARENT, classe, L"Solo Leveling: Dungeon Quest",
-        estilo, CW_USEDEFAULT, CW_USEDEFAULT, tamanho.right - tamanho.left,
-        tamanho.bottom - tamanho.top, NULL, NULL, instancia, &aplicacao);
-
-    int saida = 1;
-    if (janela == NULL) {
-        MessageBoxW(NULL, L"A janela do jogo n\u00e3o p\u00f4de ser aberta.",
-                    L"Dungeon Quest", MB_OK | MB_ICONERROR);
-    } else {
-        ShowWindow(janela, modo);
-        mostrar_tela(&aplicacao, TELA_MENU);
-
-        MSG mensagem;
-        BOOL estado;
-        while ((estado = GetMessageW(&mensagem, NULL, 0, 0)) > 0) {
-            if (!tratar_atalho(&aplicacao, &mensagem) && !IsDialogMessageW(janela, &mensagem)) {
-                TranslateMessage(&mensagem);
-                DispatchMessageW(&mensagem);
-            }
-        }
-        if (estado == 0) {
-            saida = (int)mensagem.wParam;
-        }
+    Interface interface = {0};
+    ir_para(&interface, TELA_MENU);
+    while (!WindowShouldClose()) {
+        atualizar_interface(&interface, GetFrameTime());
+        BeginDrawing();
+        desenhar_interface(&interface, (float)GetTime());
+        EndDrawing();
     }
 
-    if (aplicacao.partida_iniciada) {
-        jogo_limpar(&aplicacao.jogo);
-    }
-    if (aplicacao.fonte != NULL) {
-        DeleteObject(aplicacao.fonte);
-    }
-    if (aplicacao.fundo_campo != NULL) {
-        DeleteObject(aplicacao.fundo_campo);
-    }
-    return saida;
+    jogo_limpar(&interface.jogo);
+    CloseWindow();
+    return 0;
 }

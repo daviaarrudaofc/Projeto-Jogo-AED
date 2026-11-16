@@ -2,7 +2,6 @@
 
 #include "ordenacao.h"
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,24 +34,10 @@ static const Masmorra masmorras[] = {
     }, 3}
 };
 
-static void anotar_evento(Jogo *jogo, const char *formato, ...)
+static void anotar_evento(Jogo *jogo, const char *texto)
 {
-    size_t tamanho = strlen(jogo->mensagem);
-    va_list argumentos;
-    va_start(argumentos, formato);
-    vsnprintf(jogo->mensagem + tamanho, sizeof jogo->mensagem - tamanho,
-              formato, argumentos);
-    va_end(argumentos);
-}
-
-static int comparar_inimigos(const void *primeiro, const void *segundo)
-{
-    const Inimigo *inimigo_a = primeiro;
-    const Inimigo *inimigo_b = segundo;
-    int poder_a = inimigo_a->vida + inimigo_a->ataque;
-    int poder_b = inimigo_b->vida + inimigo_b->ataque;
-
-    return poder_a - poder_b;
+    size_t espaco = sizeof jogo->mensagem - strlen(jogo->mensagem) - 1;
+    strncat(jogo->mensagem, texto, espaco);
 }
 
 static void iniciar_turnos(Jogo *jogo, const Inimigo *inimigo)
@@ -64,10 +49,8 @@ static void iniciar_turnos(Jogo *jogo, const Inimigo *inimigo)
 
 static bool preparar_fila(Jogo *jogo)
 {
-    /* Uso uma cópia pra ordenar os inimigos sem mexer no cadastro da masmorra. */
     Masmorra masmorra = masmorras[jogo->indice_masmorra];
-    quicksort(masmorra.inimigos, masmorra.quantidade,
-              sizeof masmorra.inimigos[0], comparar_inimigos);
+    quicksort_inimigos(masmorra.inimigos, 0, masmorra.quantidade - 1);
 
     for (int indice = 0; indice < masmorra.quantidade; ++indice) {
         if (!fila_enfileirar(&jogo->fila, masmorra.inimigos[indice])) {
@@ -102,11 +85,14 @@ static void encerrar_partida(Jogo *jogo, EstadoJogo estado)
 
 bool jogo_iniciar(Jogo *jogo)
 {
-    *jogo = (Jogo){
-        .cacador = {.vida = 75, .vida_maxima = 75, .ataque = 15, .nivel = 1,
-                    .essencia = 1},
-        .estado = JOGO_EM_COMBATE
-    };
+    Jogo novo = {0};
+    novo.cacador.vida = 75;
+    novo.cacador.vida_maxima = 75;
+    novo.cacador.ataque = 15;
+    novo.cacador.nivel = 1;
+    novo.cacador.essencia = 1;
+    novo.estado = JOGO_EM_COMBATE;
+    *jogo = novo;
     fila_iniciar(&jogo->fila);
     inventario_iniciar(&jogo->cacador.inventario);
 
@@ -168,7 +154,6 @@ static void recuperar_essencia(Jogo *jogo)
 static void contra_atacar(Jogo *jogo, const Inimigo *inimigo, bool defendendo)
 {
     Cacador *cacador = &jogo->cacador;
-    /* Pego a previsão antes de avançar o turno pra aplicar o golpe que apareceu na tela. */
     bool carregado = jogo_golpe_carregado(jogo);
     int dano = jogo_dano_previsto(jogo);
     ++jogo->turno_inimigo;
@@ -182,8 +167,10 @@ static void contra_atacar(Jogo *jogo, const Inimigo *inimigo, bool defendendo)
         }
         dano = dano < cacador->vida ? dano : cacador->vida;
         cacador->vida -= dano;
-        anotar_evento(jogo, "%s causou %d de dano%s.", inimigo->nome, dano,
-                      defendendo ? " apos a defesa" : "");
+        char texto[TAMANHO_MENSAGEM_JOGO];
+        snprintf(texto, sizeof texto, "%s causou %d de dano%s.", inimigo->nome,
+                 dano, defendendo ? " apos a defesa" : "");
+        anotar_evento(jogo, texto);
     }
 
     if (cacador->vida == 0) {
@@ -191,7 +178,6 @@ static void contra_atacar(Jogo *jogo, const Inimigo *inimigo, bool defendendo)
         encerrar_partida(jogo, JOGO_DERROTA);
     } else if (inimigo->chefe && inimigo->vida <= jogo->vida_maxima_inimigo / 2 &&
                !jogo->chefe_em_furia) {
-        /* A fúria começa depois da resposta atual, então muda o dano do próximo golpe. */
         jogo->chefe_em_furia = true;
         anotar_evento(jogo, "\nA Estatua entrou em furia. Seus golpes ficaram mais fortes.");
     }
@@ -200,20 +186,22 @@ static void contra_atacar(Jogo *jogo, const Inimigo *inimigo, bool defendendo)
 static void receber_recompensa(Jogo *jogo, const Inimigo *inimigo)
 {
     Cacador *cacador = &jogo->cacador;
+    char texto[TAMANHO_MENSAGEM_JOGO];
     cacador->experiencia += inimigo->experiencia;
     cacador->pontos += inimigo->pontos;
-    anotar_evento(jogo, "\n%s foi derrotado. +%d XP e +%d pontos.",
-                  inimigo->nome, inimigo->experiencia, inimigo->pontos);
+    snprintf(texto, sizeof texto, "\n%s foi derrotado. +%d XP e +%d pontos.",
+             inimigo->nome, inimigo->experiencia, inimigo->pontos);
+    anotar_evento(jogo, texto);
 
-    /* Gasto só o XP necessário pra subir. O que sobra já conta pro próximo nível. */
     while (cacador->experiencia >= jogo_experiencia_para_subir(cacador)) {
         cacador->experiencia -= jogo_experiencia_para_subir(cacador);
         ++cacador->nivel;
         cacador->vida_maxima += 12;
         cacador->vida += 12;
         cacador->ataque += 4;
-        anotar_evento(jogo, "\nNivel %d alcancado! +12 PV e +4 de ataque.",
-                      cacador->nivel);
+        snprintf(texto, sizeof texto, "\nNivel %d alcancado! +12 PV e +4 de ataque.",
+                 cacador->nivel);
+        anotar_evento(jogo, texto);
     }
 }
 
@@ -231,9 +219,12 @@ static void entrar_masmorra(Jogo *jogo, Etapa etapa)
 static void concluir_masmorra(Jogo *jogo)
 {
     Cacador *cacador = &jogo->cacador;
+    char texto[TAMANHO_MENSAGEM_JOGO];
 
     cacador->pontos += 100;
-    anotar_evento(jogo, "\nMasmorra concluida! +100 pontos. Total: %d", cacador->pontos);
+    snprintf(texto, sizeof texto, "\nMasmorra concluida! +100 pontos. Total: %d",
+             cacador->pontos);
+    anotar_evento(jogo, texto);
 
     if (jogo->indice_masmorra == TEMPLO_DA_ESTATUA) {
         anotar_evento(jogo, "\nVitoria! Voce derrotou o chefe final.");
@@ -255,7 +246,6 @@ static void concluir_masmorra(Jogo *jogo)
         anotar_evento(jogo, "\nMemoria insuficiente para guardar a pocao encontrada.");
     }
 
-    /* A fila já ficou vazia. O jogo espera a escolha da rota antes de voltar ao combate. */
     jogo->estado = JOGO_PORTAL;
     jogo->vida_maxima_inimigo = 0;
     anotar_evento(jogo, "\nSistema: ha uma inscricao ao lado do portal do Templo.");
@@ -264,9 +254,11 @@ static void concluir_masmorra(Jogo *jogo)
 static void aplicar_golpe(Jogo *jogo, const char *origem, int ataque)
 {
     Inimigo *inimigo = fila_frente(&jogo->fila);
+    char texto[TAMANHO_MENSAGEM_JOGO];
     int dano = ataque < inimigo->vida ? ataque : inimigo->vida;
     inimigo->vida -= dano;
-    anotar_evento(jogo, "%s causou %d de dano.", origem, dano);
+    snprintf(texto, sizeof texto, "%s causou %d de dano.", origem, dano);
+    anotar_evento(jogo, texto);
 
     if (inimigo->vida > 0) {
         anotar_evento(jogo, "\n");
@@ -274,7 +266,6 @@ static void aplicar_golpe(Jogo *jogo, const char *origem, int ataque)
         return;
     }
 
-    /* Pego a recompensa primeiro porque tirar o inimigo da fila libera a memória do nó. */
     receber_recompensa(jogo, inimigo);
     fila_desenfileirar(&jogo->fila);
     const Inimigo *proximo = jogo_inimigo_atual(jogo);
@@ -345,7 +336,9 @@ void jogo_usar_item(Jogo *jogo, size_t posicao)
     int espaco_para_cura = cacador->vida_maxima - cacador->vida;
     int cura = item.cura < espaco_para_cura ? item.cura : espaco_para_cura;
     cacador->vida += cura;
-    anotar_evento(jogo, "Voce usou %s e recuperou %d PV.\n", item.nome, cura);
+    char texto[TAMANHO_MENSAGEM_JOGO];
+    snprintf(texto, sizeof texto, "Voce usou %s e recuperou %d PV.\n", item.nome, cura);
+    anotar_evento(jogo, texto);
     contra_atacar(jogo, jogo_inimigo_atual(jogo), false);
 }
 
@@ -373,7 +366,9 @@ void jogo_escolher_portal(Jogo *jogo, bool investigar)
     }
 
     Etapa destino = investigar ? MASMORRA_DUPLA : TEMPLO_DA_ESTATUA;
-    anotar_evento(jogo, "Voce entrou em %s.", masmorras[destino].nome);
+    char texto[TAMANHO_MENSAGEM_JOGO];
+    snprintf(texto, sizeof texto, "Voce entrou em %s.", masmorras[destino].nome);
+    anotar_evento(jogo, texto);
     entrar_masmorra(jogo, destino);
 }
 

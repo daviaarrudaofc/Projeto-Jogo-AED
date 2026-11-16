@@ -1,48 +1,54 @@
 #include "ordenacao.h"
 
-static void trocar(unsigned char *primeiro, unsigned char *segundo, size_t tamanho)
-{
-    /* Trocar byte por byte deixa a gente usar o mesmo QuickSort pra inimigos e pontuações. */
-    for (size_t byte = 0; byte < tamanho; ++byte) {
-        unsigned char temporario = primeiro[byte];
-        primeiro[byte] = segundo[byte];
-        segundo[byte] = temporario;
-    }
-}
-
-static int particionar(unsigned char *vetor, int inicio, int fim, size_t tamanho,
-                       int (*comparar)(const void *, const void *))
-{
-    unsigned char *pivo = vetor + (size_t)inicio * tamanho;
-    int indice = fim;
-
-    /* Pelo comparador, quem vem depois do pivô ou empata com ele vai pra direita. */
-    for (int atual = fim; atual > inicio; --atual) {
-        unsigned char *elemento = vetor + (size_t)atual * tamanho;
-        if (comparar(elemento, pivo) >= 0) {
-            trocar(elemento, vetor + (size_t)indice * tamanho, tamanho);
-            --indice;
-        }
-    }
-
-    trocar(pivo, vetor + (size_t)indice * tamanho, tamanho);
-    return indice;
-}
-
-static void ordenar_intervalo(unsigned char *vetor, int inicio, int fim, size_t tamanho,
-                              int (*comparar)(const void *, const void *))
+void quicksort_inimigos(Inimigo vetor[], int inicio, int fim)
 {
     if (inicio >= fim) {
         return;
     }
 
-    int pivo = particionar(vetor, inicio, fim, tamanho, comparar);
-    ordenar_intervalo(vetor, inicio, pivo - 1, tamanho, comparar);
-    ordenar_intervalo(vetor, pivo + 1, fim, tamanho, comparar);
+    int poder_pivo = vetor[inicio].vida + vetor[inicio].ataque;
+    int posicao_pivo = fim;
+
+    for (int atual = fim; atual > inicio; --atual) {
+        int poder = vetor[atual].vida + vetor[atual].ataque;
+        if (poder >= poder_pivo) {
+            Inimigo temporario = vetor[atual];
+            vetor[atual] = vetor[posicao_pivo];
+            vetor[posicao_pivo] = temporario;
+            --posicao_pivo;
+        }
+    }
+
+    Inimigo pivo = vetor[inicio];
+    vetor[inicio] = vetor[posicao_pivo];
+    vetor[posicao_pivo] = pivo;
+
+    quicksort_inimigos(vetor, inicio, posicao_pivo - 1);
+    quicksort_inimigos(vetor, posicao_pivo + 1, fim);
 }
 
-void quicksort(void *vetor, int quantidade, size_t tamanho_elemento,
-               int (*comparar)(const void *, const void *))
+void quicksort_pontuacoes(Pontuacao vetor[], int inicio, int fim)
 {
-    ordenar_intervalo(vetor, 0, quantidade - 1, tamanho_elemento, comparar);
+    if (inicio >= fim) {
+        return;
+    }
+
+    int pontos_pivo = vetor[inicio].pontos;
+    int posicao_pivo = fim;
+
+    for (int atual = fim; atual > inicio; --atual) {
+        if (vetor[atual].pontos <= pontos_pivo) {
+            Pontuacao temporario = vetor[atual];
+            vetor[atual] = vetor[posicao_pivo];
+            vetor[posicao_pivo] = temporario;
+            --posicao_pivo;
+        }
+    }
+
+    Pontuacao pivo = vetor[inicio];
+    vetor[inicio] = vetor[posicao_pivo];
+    vetor[posicao_pivo] = pivo;
+
+    quicksort_pontuacoes(vetor, inicio, posicao_pivo - 1);
+    quicksort_pontuacoes(vetor, posicao_pivo + 1, fim);
 }

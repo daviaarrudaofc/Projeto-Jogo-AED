@@ -49,7 +49,6 @@ bool fila_desenfileirar(Fila *fila)
     NoInimigo *removido = fila->inicio;
     fila->inicio = removido->proximo;
     if (fila->inicio == NULL) {
-        /* Saiu o último. Limpa o fim também, porque esse nó vai ser liberado. */
         fila->fim = NULL;
     }
 

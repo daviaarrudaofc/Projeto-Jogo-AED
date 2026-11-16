@@ -1,567 +1,669 @@
 #include "tela.h"
 
-enum {
-    FONTE_LEGENDA,
-    FONTE_TEXTO,
-    FONTE_FORTE,
-    FONTE_SECAO,
-    FONTE_TITULO,
-    FONTE_HEROI,
-    QUANTIDADE_FONTES
-};
+#include <stdio.h>
+#include <string.h>
 
-typedef struct {
-    HDC contexto;
-    HFONT fontes[QUANTIDADE_FONTES];
-} Pintura;
+static const Color fundo = {8, 12, 23, 255};
+static const Color painel_escuro = {17, 23, 42, 255};
+static const Color campo = {25, 30, 52, 255};
+static const Color borda = {56, 61, 95, 255};
+static const Color texto = {241, 241, 255, 255};
+static const Color suave = {167, 178, 206, 255};
+static const Color portal = {179, 150, 252, 255};
+static const Color vida = {98, 229, 188, 255};
+static const Color dano = {255, 126, 158, 255};
+static const Color alerta = {255, 204, 128, 255};
 
-static const COLORREF cor_fundo = RGB(10, 13, 26);
-static const COLORREF cor_painel = RGB(17, 22, 40);
-static const COLORREF cor_borda = RGB(39, 48, 75);
-static const COLORREF cor_suave = RGB(164, 176, 208);
-static const COLORREF cor_portal = RGB(175, 146, 255);
-static const COLORREF cor_vida = RGB(86, 224, 181);
-static const COLORREF cor_dano = RGB(247, 114, 155);
-static const COLORREF cor_alerta = RGB(255, 197, 115);
-
-static HFONT criar_fonte(int tamanho, int peso)
+static float parte_fracionaria(float valor)
 {
-    return CreateFontW(-tamanho, 0, 0, 0, peso, FALSE, FALSE, FALSE,
-                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Inter");
+    return valor - (int)valor;
 }
 
-static void preencher(HDC contexto, int x, int y, int largura, int altura, COLORREF cor)
+static float subir_e_descer(float progresso)
 {
-    RECT area = {x, y, x + largura, y + altura};
-    SetDCBrushColor(contexto, cor);
-    FillRect(contexto, &area, (HBRUSH)GetStockObject(DC_BRUSH));
-}
-
-static void painel(HDC contexto, int x, int y, int largura, int altura, COLORREF borda)
-{
-    preencher(contexto, x, y, largura, altura, borda);
-    preencher(contexto, x + 1, y + 1, largura - 2, altura - 2, cor_painel);
-}
-
-static COLORREF cor_pulso(COLORREF base, COLORREF destaque, unsigned efeito_ms)
-{
-    const unsigned duracao = 260;
-    unsigned peso = efeito_ms < duracao ? efeito_ms : duracao;
-    unsigned restante = duracao - peso;
-
-    return RGB((GetRValue(base) * restante + GetRValue(destaque) * peso) / duracao,
-               (GetGValue(base) * restante + GetGValue(destaque) * peso) / duracao,
-               (GetBValue(base) * restante + GetBValue(destaque) * peso) / duracao);
-}
-
-static void escrever(HDC contexto, HFONT fonte, COLORREF cor, int x, int y,
-                     int largura, int altura, UINT formato, const wchar_t *texto)
-{
-    RECT area = {x, y, x + largura, y + altura};
-    HGDIOBJ anterior = NULL;
-    if (fonte != NULL) {
-        anterior = SelectObject(contexto, fonte);
+    if (progresso < 0.5f) {
+        return 2.0f * progresso;
     }
-    SetBkMode(contexto, TRANSPARENT);
-    SetTextColor(contexto, cor);
-    DrawTextW(contexto, texto, -1, &area, DT_NOPREFIX | formato);
-    if (anterior != NULL) {
-        SelectObject(contexto, anterior);
+    return 2.0f * (1.0f - progresso);
+}
+
+static void painel(Rectangle area, Color interior, Color contorno)
+{
+    Rectangle sombra = {area.x, area.y + 5, area.width, area.height};
+    Rectangle corpo = {area.x + 1, area.y + 1, area.width - 2, area.height - 2};
+    DrawRectangleRounded(sombra, 0.08f, 8, Fade(BLACK, 0.42f));
+    DrawRectangleRounded(area, 0.08f, 8, contorno);
+    DrawRectangleRounded(corpo, 0.08f, 8, interior);
+}
+
+static void texto_central(const char *valor, Rectangle area, int tamanho, Color cor)
+{
+    int largura = MeasureText(valor, tamanho);
+    DrawText(valor, (int)(area.x + (area.width - largura) / 2),
+             (int)(area.y + (area.height - tamanho) / 2), tamanho, cor);
+}
+
+static void texto_direita(const char *valor, int limite_direito, int linha_y, int tamanho, Color cor)
+{
+    DrawText(valor, limite_direito - MeasureText(valor, tamanho), linha_y, tamanho, cor);
+}
+
+static void texto_recortado(const char *valor, Rectangle area, int tamanho, Color cor)
+{
+    BeginScissorMode((int)area.x, (int)area.y, (int)area.width, (int)area.height);
+    DrawText(valor, (int)area.x, (int)area.y, tamanho, cor);
+    EndScissorMode();
+}
+
+static void texto_bloco(const char *valor, Rectangle area, int tamanho, int passo, Color cor)
+{
+    char linha[TAMANHO_MENSAGEM_JOGO] = {0};
+    size_t ocupados = 0;
+    int linha_y = (int)area.y;
+    int fim = (int)(area.y + area.height);
+
+    while (*valor != '\0' && linha_y + tamanho <= fim) {
+        size_t palavra = strcspn(valor, " \n");
+        if (palavra == 0) {
+            if (*valor == '\n') {
+                DrawText(linha, (int)area.x, linha_y, tamanho, cor);
+                linha_y += passo;
+                ocupados = 0;
+                linha[0] = '\0';
+            }
+            ++valor;
+            continue;
+        }
+
+        size_t anterior = ocupados;
+        if (ocupados + 1 >= sizeof linha) {
+            DrawText(linha, (int)area.x, linha_y, tamanho, cor);
+            linha_y += passo;
+            ocupados = 0;
+            linha[0] = '\0';
+            continue;
+        }
+        if (ocupados != 0) {
+            linha[ocupados++] = ' ';
+        }
+        size_t disponivel = sizeof linha - ocupados - 1;
+        size_t tamanho_palavra = palavra < disponivel ? palavra : disponivel;
+        memcpy(linha + ocupados, valor, tamanho_palavra);
+        ocupados += tamanho_palavra;
+        linha[ocupados] = '\0';
+
+        if (anterior != 0 && (MeasureText(linha, tamanho) > area.width || tamanho_palavra < palavra)) {
+            linha[anterior] = '\0';
+            DrawText(linha, (int)area.x, linha_y, tamanho, cor);
+            linha_y += passo;
+            ocupados = 0;
+            linha[0] = '\0';
+        } else {
+            valor += palavra;
+        }
     }
-}
-
-static void texto(Pintura *pintura, int fonte, COLORREF cor, int x, int y,
-                  int largura, int altura, const wchar_t *conteudo)
-{
-    escrever(pintura->contexto, pintura->fontes[fonte], cor, x, y, largura,
-             altura, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS, conteudo);
-}
-
-static void paragrafo(Pintura *pintura, int fonte, COLORREF cor, int x, int y,
-                      int largura, int altura, const wchar_t *conteudo)
-{
-    escrever(pintura->contexto, pintura->fontes[fonte], cor, x, y, largura,
-             altura, DT_WORDBREAK, conteudo);
-}
-
-static void converter_texto(const char *origem, wchar_t *destino, int capacidade)
-{
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, origem, -1, destino,
-                            capacidade) == 0) {
-        destino[0] = L'\0';
-    }
-}
-
-static void contorno(HDC contexto, const POINT *pontos, int quantidade, COLORREF cor)
-{
-    HGDIOBJ anterior = SelectObject(contexto, GetStockObject(DC_PEN));
-    SetDCPenColor(contexto, cor);
-    Polyline(contexto, pontos, quantidade);
-    SelectObject(contexto, anterior);
-}
-
-static void elipse(HDC contexto, int x, int y, int largura, int altura,
-                    COLORREF borda, COLORREF interior)
-{
-    HGDIOBJ pincel = SelectObject(contexto, GetStockObject(DC_BRUSH));
-    HGDIOBJ caneta = SelectObject(contexto, GetStockObject(DC_PEN));
-    SetDCBrushColor(contexto, interior);
-    SetDCPenColor(contexto, borda);
-    Ellipse(contexto, x, y, x + largura, y + altura);
-    SelectObject(contexto, pincel);
-    SelectObject(contexto, caneta);
-}
-
-static void desenhar_portal(HDC contexto)
-{
-    const POINT arestas[][3] = {
-        {{58, 565}, {262, 432}, {471, 565}},
-        {{124, 565}, {262, 432}, {405, 565}},
-        {{185, 565}, {262, 432}, {346, 565}}
-    };
-    const POINT portal_externo[] = {
-        {262, 343}, {315, 388}, {324, 469}, {262, 520},
-        {206, 469}, {209, 390}, {262, 343}
-    };
-    const POINT portal_interno[] = {
-        {262, 356}, {302, 395}, {313, 462}, {262, 506},
-        {221, 462}, {221, 398}, {262, 356}
-    };
-    const POINT fissura[] = {
-        {269, 381}, {253, 425}, {270, 419}, {254, 480}
-    };
-    const POINT particulas[] = {
-        {134, 413}, {168, 471}, {200, 379}, {213, 515}, {181, 439},
-        {329, 364}, {342, 443}, {363, 476}, {388, 410}, {324, 502}
-    };
-
-    for (size_t indice = 0; indice < sizeof arestas / sizeof arestas[0]; ++indice) {
-        contorno(contexto, arestas[indice], 3, RGB(36, 41, 69));
-    }
-    preencher(contexto, 93, 545, 351, 1, RGB(38, 42, 71));
-    elipse(contexto, 130, 480, 264, 55, RGB(51, 49, 95), RGB(16, 18, 36));
-    elipse(contexto, 162, 486, 200, 42, RGB(89, 71, 148), RGB(21, 21, 47));
-    elipse(contexto, 198, 489, 128, 27, RGB(133, 96, 208), RGB(34, 26, 73));
-
-    elipse(contexto, 199, 343, 126, 181, RGB(47, 40, 88), RGB(16, 18, 40));
-    elipse(contexto, 208, 351, 108, 162, RGB(77, 56, 142), RGB(29, 22, 61));
-    elipse(contexto, 222, 361, 80, 144, RGB(124, 82, 202), RGB(49, 30, 98));
-    elipse(contexto, 236, 374, 52, 115, RGB(167, 110, 235), RGB(76, 42, 137));
-    elipse(contexto, 249, 387, 26, 88, RGB(194, 153, 255), RGB(112, 66, 179));
-    contorno(contexto, portal_externo, 7, RGB(110, 80, 178));
-    contorno(contexto, portal_interno, 7, cor_portal);
-    contorno(contexto, fissura, 4, RGB(235, 203, 255));
-
-    for (size_t indice = 0; indice < sizeof particulas / sizeof particulas[0]; ++indice) {
-        int x = particulas[indice].x;
-        int y = particulas[indice].y;
-        preencher(contexto, x, y, 3, 3, cor_portal);
+    if (ocupados != 0 && linha_y + tamanho <= fim) {
+        DrawText(linha, (int)area.x, linha_y, tamanho, cor);
     }
 }
 
-static void desenhar_menu(Pintura *pintura, const wchar_t *erro_nome)
+static void etiqueta(const char *valor, Rectangle area, Color cor)
 {
-    HDC contexto = pintura->contexto;
-
-    texto(pintura, FONTE_HEROI, COR_TEXTO, 54, 140, 465, 71, L"Solo Leveling");
-    texto(pintura, FONTE_TITULO, cor_portal, 58, 201, 450, 49, L"Dungeon Quest");
-    paragrafo(pintura, FONTE_TEXTO, cor_suave, 59, 271, 378, 57,
-              L"Atravesse as masmorras, evolua como ca\u00e7ador e enfrente a Est\u00e1tua Divina.");
-    desenhar_portal(contexto);
-
-    painel(contexto, 524, 155, 369, 276, cor_borda);
-    preencher(contexto, 524, 155, 369, 2, cor_portal);
-    texto(pintura, FONTE_FORTE, COR_TEXTO, 552, 190, 312, 25, L"Nome do ca\u00e7ador");
-    painel(contexto, 551, 218, 314, 44, cor_borda);
-    if (erro_nome != NULL && *erro_nome != L'\0') {
-        paragrafo(pintura, FONTE_LEGENDA, cor_dano, 552, 392, 312, 35, erro_nome);
-    }
+    DrawRectangleRounded(area, 0.25f, 8, campo);
+    DrawRectangleRounded(area, 0.25f, 8, Fade(cor, 0.13f));
+    texto_central(valor, area, 13, cor);
 }
 
-static void cabecalho(Pintura *pintura, const wchar_t *titulo, const wchar_t *subtitulo)
+static void fundo_tela(void)
 {
-    texto(pintura, FONTE_TITULO, COR_TEXTO, 40, 25, 840, 45, titulo);
+    ClearBackground(fundo);
+    DrawRectangleGradientV(0, 0, LARGURA_TELA, ALTURA_TELA,
+                           (Color){17, 18, 40, 255}, fundo);
+    Vector2 centro = {932, -64};
+    for (int raio = 96; raio <= 380; raio += 47) {
+        DrawCircleLinesV(centro, (float)raio, Fade(portal, 0.065f));
+    }
+    DrawRectangleGradientH(0, 0, LARGURA_TELA, 3, portal, Fade(portal, 0.14f));
+    DrawRectangle(40, 624, 920, 1, Fade(borda, 0.65f));
+}
+
+static void cabecalho(const char *categoria, const char *titulo, const char *subtitulo)
+{
+    DrawText(categoria, 41, 20, 13, portal);
+    DrawText(titulo, 40, 40, 37, texto);
     if (subtitulo != NULL) {
-        texto(pintura, FONTE_TEXTO, cor_suave, 41, 71, 838, 22, subtitulo);
+        DrawText(subtitulo, 42, 87, 17, suave);
     }
-    preencher(pintura->contexto, 40, 99, 840, 1, cor_borda);
+    DrawRectangle(40, 111, 920, 1, Fade(borda, 0.84f));
 }
 
-static void barra(Pintura *pintura, const wchar_t *rotulo, int atual, int maximo,
-                  int x, int y, int largura, COLORREF cor)
+static void selo_portal(Vector2 centro, float escala, float tempo, bool ativo)
 {
-    wchar_t valores[48];
-    wsprintfW(valores, L"%d / %d", atual, maximo);
-    texto(pintura, FONTE_LEGENDA, COR_TEXTO, x, y, largura / 2, 20, rotulo);
-    escrever(pintura->contexto, pintura->fontes[FONTE_LEGENDA], cor_suave,
-             x + largura / 2, y, largura - largura / 2, 20,
-             DT_RIGHT | DT_SINGLELINE | DT_VCENTER, valores);
-
-    preencher(pintura->contexto, x, y + 23, largura, 7, COR_CAMPO);
-    if (maximo > 0 && atual > 0) {
-        int preenchimento = atual < maximo ? largura * atual / maximo : largura;
-        preencher(pintura->contexto, x, y + 23, preenchimento, 7, cor);
-    }
-}
-
-static void desenhar_cacador(Pintura *pintura, const Jogo *jogo, const wchar_t *nome,
-                             unsigned efeito_ms)
-{
-    const Cacador *cacador = &jogo->cacador;
-    wchar_t detalhes[64];
-    wchar_t sombra[48];
-    HDC contexto = pintura->contexto;
-
-    painel(contexto, 40, 111, 367, 218, cor_pulso(cor_borda, cor_vida, efeito_ms));
-    preencher(contexto, 40, 111, 3, 218, cor_vida);
-    texto(pintura, FONTE_SECAO, COR_TEXTO, 64, 121, 229, 37, nome);
-    preencher(contexto, 306, 128, 77, 24, RGB(50, 41, 88));
-    escrever(contexto, pintura->fontes[FONTE_LEGENDA], cor_portal,
-             306, 128, 77, 24, DT_CENTER | DT_SINGLELINE | DT_VCENTER, L"RANK E");
-    wsprintfW(detalhes, L"Nv. %d   \u2022   Ataque %d   \u2022   %d pontos", cacador->nivel,
-              cacador->ataque, cacador->pontos);
-    texto(pintura, FONTE_TEXTO, cor_suave, 64, 159, 319, 22, detalhes);
-
-    barra(pintura, L"VIDA", cacador->vida, cacador->vida_maxima, 64, 189, 319, cor_vida);
-    barra(pintura, L"EXPERI\u00caNCIA", cacador->experiencia, jogo_experiencia_para_subir(cacador),
-          64, 229, 319, cor_portal);
-
-    wsprintfW(detalhes, L"ESS\u00caNCIA  %d / %d", cacador->essencia, ESSENCIA_MAXIMA);
-    texto(pintura, FONTE_LEGENDA, COR_TEXTO, 64, 274, 168, 19, detalhes);
-    const int largura_bloco = 144 / ESSENCIA_MAXIMA;
-    for (int indice = 0; indice < ESSENCIA_MAXIMA; ++indice) {
-        COLORREF cor = indice < cacador->essencia ? cor_portal : COR_CAMPO;
-        preencher(contexto, 239 + indice * largura_bloco, 278, largura_bloco - 4, 11, cor);
-    }
-
-    const bool pode_invocar = cacador->essencia > 0;
-    if (pode_invocar) {
-        wsprintfW(sombra, cacador->tem_igris ? L"Igris \u2022 %d de dano" : L"Sombra \u2022 %d de dano",
-                  jogo_dano_sombra(jogo));
-    } else {
-        wsprintfW(sombra, cacador->tem_igris ? L"Igris sem ess\u00eancia" : L"Sombra sem ess\u00eancia");
-    }
-    texto(pintura, FONTE_LEGENDA, pode_invocar ? cor_portal : cor_suave, 64, 296, 319, 22, sombra);
-}
-
-static void desenhar_inimigo(Pintura *pintura, Jogo *jogo, unsigned efeito_ms)
-{
-    const Inimigo *inimigo = jogo_inimigo_atual(jogo);
-    HDC contexto = pintura->contexto;
-    if (inimigo == NULL) {
-        return;
-    }
-
-    bool carregado = jogo_golpe_carregado(jogo);
-    const COLORREF cor = carregado ? cor_alerta : cor_dano;
-    const COLORREF fundo_previsao = carregado ? RGB(53, 35, 38) : COR_CAMPO;
-    const COLORREF borda = carregado ? RGB(131, 85, 55) : cor_borda;
-    const wchar_t *tipo = inimigo->chefe ? L"CHEFE" : L"INIMIGO";
-    if (jogo->chefe_em_furia) {
-        tipo = L"CHEFE EM F\u00daRIA";
-    }
-    const wchar_t *dica = L"Defender reduz o dano pela metade.";
-    if (carregado) {
-        dica = jogo->cacador.essencia < ESSENCIA_MAXIMA
-            ? L"Defender anula o dano e recupera 1 de ess\u00eancia."
-            : L"Defender anula o dano.";
-    }
-    wchar_t nome[80];
-    wchar_t previsao[32];
-    converter_texto(inimigo->nome, nome, 80);
-    wsprintfW(previsao, L"%d de dano", jogo_dano_previsto(jogo));
-
-    painel(contexto, 427, 111, 453, 218, cor_pulso(borda, cor, efeito_ms));
-    preencher(contexto, 427, 111, 3, 218, cor);
-    texto(pintura, FONTE_LEGENDA, cor, 451, 126, 404, 19, tipo);
-    texto(pintura, FONTE_SECAO, COR_TEXTO, 451, 148, 404, 37, nome);
-    barra(pintura, L"VIDA", inimigo->vida, jogo->vida_maxima_inimigo,
-          451, 201, 404, cor_dano);
-
-    preencher(contexto, 451, 250, 404, 62, fundo_previsao);
-    preencher(contexto, 451, 250, 3, 62, carregado ? cor_alerta : cor_borda);
-    texto(pintura, FONTE_FORTE, carregado ? cor_alerta : COR_TEXTO, 465, 253, 234, 27,
-          carregado ? L"GOLPE CARREGADO" : L"PR\u00d3XIMO GOLPE");
-    escrever(contexto, pintura->fontes[FONTE_FORTE], carregado ? cor_alerta : COR_TEXTO,
-             699, 253, 144, 27, DT_RIGHT | DT_SINGLELINE | DT_VCENTER, previsao);
-    texto(pintura, FONTE_LEGENDA, cor_suave, 465, 280, 378, 22, dica);
-}
-
-static void desenhar_combate(Pintura *pintura, Jogo *jogo, const wchar_t *nome,
-                             unsigned efeito_ms)
-{
-    wchar_t masmorra[96];
-    wchar_t eventos[TAMANHO_MENSAGEM_JOGO];
-    converter_texto(jogo_nome_masmorra(jogo), masmorra, 96);
-
-    cabecalho(pintura, masmorra, L"Sistema \u2022 Previs\u00e3o de combate");
-    desenhar_cacador(pintura, jogo, nome, efeito_ms);
-    desenhar_inimigo(pintura, jogo, efeito_ms);
-
-    painel(pintura->contexto, 40, 345, 840, 158, cor_borda);
-    texto(pintura, FONTE_FORTE, cor_portal, 62, 353, 795, 23, L"Registro do Sistema");
-    converter_texto(jogo->mensagem, eventos, TAMANHO_MENSAGEM_JOGO);
-    paragrafo(pintura, FONTE_LEGENDA, COR_TEXTO, 62, 382, 795, 112, eventos);
-}
-
-static void desenhar_escolha_portal(Pintura *pintura, const Jogo *jogo)
-{
-    HDC contexto = pintura->contexto;
-    wchar_t eventos[TAMANHO_MENSAGEM_JOGO];
-    converter_texto(jogo->mensagem, eventos, TAMANHO_MENSAGEM_JOGO);
-
-    cabecalho(pintura, L"Portal do templo", L"Sistema \u2022 Ponto de explora\u00e7\u00e3o");
-    painel(contexto, 40, 111, 401, 392, cor_borda);
-    painel(contexto, 455, 111, 425, 392, cor_borda);
-    preencher(contexto, 455, 111, 3, 392, jogo->portal_examinado ? cor_alerta : cor_portal);
-    texto(pintura, FONTE_LEGENDA, cor_portal, 62, 130, 357, 25, L"PASSAGEM LATERAL");
-
-    int desenho_salvo = SaveDC(contexto);
-    if (desenho_salvo != 0) {
-        IntersectClipRect(contexto, 41, 161, 440, 417);
-        OffsetViewportOrgEx(contexto, -19, -159, NULL);
-        desenhar_portal(contexto);
-        RestoreDC(contexto, desenho_salvo);
-    }
-    paragrafo(pintura, FONTE_TEXTO, cor_suave, 62, 440, 357, 50,
-              L"O portal que leva ao templo continua aberto.");
-
-    const wchar_t *titulo = jogo->portal_examinado ? L"Masmorra Dupla" : L"Inscri\u00e7\u00e3o antiga";
-    const wchar_t *pista = jogo->portal_examinado
-        ? L"Um guardi\u00e3o espera do outro lado. Avalie sua vida antes de entrar."
-        : L"A poeira cobre os s\u00edmbolos na parede. Ainda \u00e9 poss\u00edvel decifrar o que dizem.";
-    texto(pintura, FONTE_SECAO, COR_TEXTO, 480, 132, 374, 45, titulo);
-    paragrafo(pintura, FONTE_TEXTO, cor_suave, 480, 184, 367, 81, pista);
-
-    preencher(contexto, 480, 281, 375, 1, cor_borda);
-    texto(pintura, FONTE_LEGENDA, cor_portal, 480, 295, 374, 27, L"MENSAGEM DO SISTEMA");
-    paragrafo(pintura, FONTE_TEXTO, COR_TEXTO, 480, 329, 370, 148, eventos);
-}
-
-static void desenhar_inventario(Pintura *pintura, const Jogo *jogo)
-{
-    cabecalho(pintura, L"Invent\u00e1rio", NULL);
-    painel(pintura->contexto, 40, 111, 840, 392, cor_borda);
-    texto(pintura, FONTE_FORTE, COR_TEXTO, 62, 123, 796, 28, L"Itens coletados");
-    painel(pintura->contexto, 61, 155, 798, 292, cor_borda);
-    if (inventario_quantidade(&jogo->cacador.inventario) == 0) {
-        escrever(pintura->contexto, pintura->fontes[FONTE_TEXTO], cor_suave,
-                 62, 156, 796, 290, DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                 L"Seu invent\u00e1rio est\u00e1 vazio.");
-    }
-    texto(pintura, FONTE_TEXTO, cor_suave, 62, 455, 796, 30,
-          L"Usar uma po\u00e7\u00e3o gasta o turno.");
-}
-
-static void desenhar_ranking(Pintura *pintura, const Ranking *ranking)
-{
-    HDC contexto = pintura->contexto;
-    cabecalho(pintura, L"Ranking da sess\u00e3o",
-               L"As pontua\u00e7\u00f5es ficam dispon\u00edveis at\u00e9 fechar o jogo.");
-    painel(contexto, 40, 111, 840, 392, cor_borda);
-    texto(pintura, FONTE_LEGENDA, cor_suave, 64, 125, 102, 26, L"POSI\u00c7\u00c3O");
-    texto(pintura, FONTE_LEGENDA, cor_suave, 166, 125, 430, 26, L"CA\u00c7ADOR");
-    escrever(contexto, pintura->fontes[FONTE_LEGENDA], cor_suave, 628, 125, 224,
-             26, DT_RIGHT | DT_VCENTER | DT_SINGLELINE, L"PONTOS");
-
-    if (ranking->quantidade == 0) {
-        escrever(contexto, pintura->fontes[FONTE_TEXTO], cor_suave, 63, 166,
-                 794, 305, DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                 L"Nenhuma pontua\u00e7\u00e3o registrada.");
-        return;
-    }
-
-    for (int indice = 0; indice < ranking->quantidade; ++indice) {
-        const Pontuacao *resultado = &ranking->resultados[indice];
-        wchar_t nome[TAMANHO_NOME];
-        wchar_t numero[24];
-        int y = 158 + 33 * indice;
-
-        COLORREF fundo_linha = indice == 0 ? RGB(43, 32, 80) : COR_CAMPO;
-        preencher(contexto, 61, y, 798, 29, fundo_linha);
-
-        wsprintfW(numero, L"%02d", indice + 1);
-        texto(pintura, FONTE_FORTE, cor_portal, 70, y, 82, 29, numero);
-        converter_texto(resultado->nome, nome, TAMANHO_NOME);
-        texto(pintura, FONTE_TEXTO, COR_TEXTO, 166, y, 437, 29, nome);
-
-        wsprintfW(numero, L"%d", resultado->pontos);
-        escrever(contexto, pintura->fontes[FONTE_FORTE], COR_TEXTO, 628, y, 224,
-                 29, DT_RIGHT | DT_VCENTER | DT_SINGLELINE, numero);
-    }
-}
-
-static void desenhar_ajuda(Pintura *pintura)
-{
-    const struct {
-        const wchar_t *titulo;
-        const wchar_t *descricao;
-    } topicos[] = {
-        {L"Atacar", L"Ataque o inimigo da frente. O Sistema mostra quanto dano ele pode causar se sobreviver."},
-        {L"Defender", L"Reduza o dano normal pela metade. Defender um golpe carregado anula o dano e recupera 1 de ess\u00eancia."},
-        {L"Erga-se", L"Gaste 1 de ess\u00eancia para invocar uma sombra que causa mais dano do que seu ataque normal."},
-        {L"Recuperar vida e evoluir", L"Usar po\u00e7\u00e3o consome o turno. Derrote inimigos para ganhar XP, subir de n\u00edvel e aumentar sua vida e ataque."},
-        {L"Explorar o portal", L"Ao abrir o portal do templo, decida se vale a pena examinar a inscri\u00e7\u00e3o na passagem lateral."}
+    const Vector2 pontos[] = {
+        {-66, -53}, {-30, -89}, {4, -98}, {35, -94}, {65, -72}, {77, -32},
+        {92, -10}, {77, 35}, {61, 75}, {33, 92}, {5, 102}, {-35, 86},
+        {-69, 71}, {-90, 40}, {-83, -6}, {-92, -28}
     };
+    float pulso = subir_e_descer(parte_fracionaria(tempo * 0.45f));
+    int centro_x = (int)centro.x;
+    int centro_y = (int)centro.y;
+    for (int camada = 0; camada < 5; ++camada) {
+        float largura = (63 - 9 * camada) * escala;
+        float altura = (89 - 11 * camada) * escala;
+        DrawEllipse(centro_x, centro_y, largura, altura, Fade(portal, 0.08f + camada * 0.026f));
+        DrawEllipseLines(centro_x, centro_y, largura, altura, Fade(portal, 0.25f + 0.07f * camada));
+    }
 
-    cabecalho(pintura, L"Como jogar", NULL);
-    painel(pintura->contexto, 40, 111, 840, 392, cor_borda);
-    for (size_t indice = 0; indice < sizeof topicos / sizeof topicos[0]; ++indice) {
-        int y = 123 + (int)indice * 74;
-        texto(pintura, FONTE_FORTE, COR_TEXTO, 66, y, 785, 26, topicos[indice].titulo);
-        paragrafo(pintura, FONTE_TEXTO, cor_suave, 67, y + 29, 778, 40,
-                  topicos[indice].descricao);
-        preencher(pintura->contexto, 66, y + 69, 788, 1, cor_borda);
+    Vector2 topo = {centro.x + 6 * escala, centro.y - 55 * escala};
+    Vector2 dobra = {centro.x - 10 * escala, centro.y - 3 * escala};
+    Vector2 quina = {centro.x + 12 * escala, centro.y - 12 * escala};
+    Vector2 base = {centro.x - 9 * escala, centro.y + 53 * escala};
+    Color brilho = Fade(texto, 0.66f + pulso * 0.3f);
+    DrawLineEx(topo, dobra, 3 * escala, brilho);
+    DrawLineEx(dobra, quina, 3 * escala, brilho);
+    DrawLineEx(quina, base, 3 * escala, brilho);
+
+    for (size_t indice = 0; indice < sizeof pontos / sizeof pontos[0]; ++indice) {
+        float distancia = escala * (0.91f + 0.12f * pulso);
+        Vector2 particula = {centro.x + pontos[indice].x * distancia,
+                             centro.y + pontos[indice].y * distancia};
+        DrawCircleV(particula, (indice % 3 == 0 ? 2.8f : 1.5f) * escala,
+                    Fade(portal, (ativo ? 0.52f : 0.30f) + 0.3f * pulso));
     }
 }
 
-static void desenhar_resultado(Pintura *pintura, const Jogo *jogo, const wchar_t *nome)
+static void menu(const QuadroTela *quadro)
 {
-    HDC contexto = pintura->contexto;
-    COLORREF cor = jogo->estado == JOGO_VITORIA ? cor_vida : cor_dano;
-    const wchar_t *resultado;
-    switch (jogo->estado) {
-        case JOGO_VITORIA:
-            resultado = L"Vit\u00f3ria";
-            break;
-        case JOGO_DERROTA:
-            resultado = L"Derrota";
-            break;
-        default:
-            resultado = L"Partida interrompida";
-            break;
-    }
+    painel((Rectangle){40, 76, 920, 486}, Fade(painel_escuro, 0.70f), borda);
+    DrawRectangle(41, 77, 4, 484, Fade(portal, 0.70f));
+    DrawLine(529, 101, 529, 539, Fade(borda, 0.65f));
 
-    cabecalho(pintura, resultado, nome);
-    painel(contexto, 40, 111, 840, 392, cor_borda);
-    preencher(contexto, 40, 111, 3, 392, cor);
-    const bool tem_pontuacao = jogo->estado == JOGO_VITORIA || jogo->estado == JOGO_DERROTA;
-    if (tem_pontuacao) {
-        wchar_t total[48];
-        wsprintfW(total, L"%d pontos", jogo->cacador.pontos);
-        texto(pintura, FONTE_HEROI, cor, 66, 135, 785, 78, total);
-    }
+    DrawText("Solo Leveling", 70, 117, 54, texto);
+    DrawText("Dungeon Quest", 73, 179, 41, portal);
+    texto_bloco("Atravesse os portais, evolua como caçador e enfrente a Estátua Divina.",
+                (Rectangle){75, 244, 390, 62}, 20, 24, suave);
 
-    wchar_t eventos[TAMANHO_MENSAGEM_JOGO];
-    converter_texto(jogo->mensagem, eventos, TAMANHO_MENSAGEM_JOGO);
-    int inicio_eventos = tem_pontuacao ? 234 : 147;
-    paragrafo(pintura, FONTE_TEXTO, COR_TEXTO, 66, inicio_eventos, 785,
-              470 - inicio_eventos, eventos);
+    for (int raio = 76; raio <= 155; raio += 26) {
+        DrawCircleLinesV((Vector2){285, 425}, (float)raio, Fade(portal, 0.10f));
+    }
+    DrawEllipse(285, 498, 145, 21, Fade(portal, 0.10f));
+    DrawEllipseLines(285, 498, 145, 21, Fade(portal, 0.42f));
+    DrawEllipseLines(285, 498, 111, 13, Fade(portal, 0.44f));
+    selo_portal((Vector2){285, 418}, 0.86f, quadro->tempo, true);
+
+    painel((Rectangle){565, 169, 390, 294}, painel_escuro, borda);
+    DrawRectangle(582, 172, 354, 2, Fade(portal, 0.53f));
+    DrawText("Nome do caçador", 588, 210, 20, texto);
+    Rectangle entrada = {588, 241, 344, 48};
+    painel(entrada, campo, quadro->editando_nome ? portal : borda);
+    const char *nome = quadro->nome == NULL ? "" : quadro->nome;
+    if (*nome == '\0' && !quadro->editando_nome) {
+        DrawText("Digite seu nome", 603, 255, 20, suave);
+    } else {
+        int largura = MeasureText(nome, 20);
+        int inicio = largura > 303 ? 906 - largura : 603;
+        BeginScissorMode(602, 247, 313, 36);
+        DrawText(nome, inicio, 255, 20, texto);
+        if (quadro->editando_nome && parte_fracionaria(quadro->tempo) < 0.58f) {
+            DrawRectangle(inicio + largura + 3, 251, 2, 25, portal);
+        }
+        EndScissorMode();
+    }
+    if (quadro->aviso != NULL && *quadro->aviso != '\0') {
+        texto_bloco(quadro->aviso, (Rectangle){589, 416, 343, 40}, 17, 19, dano);
+    }
 }
 
-static void pintar_tela(HDC contexto, const RECT *cliente, TelaJogo tela, Jogo *jogo,
-                       const Ranking *ranking, const wchar_t *nome,
-                       const wchar_t *erro_nome, unsigned efeito_ms)
+static void piso_mapa(void)
 {
-    Pintura pintura = {contexto, {
-        criar_fonte(15, FW_NORMAL), criar_fonte(17, FW_NORMAL),
-        criar_fonte(17, FW_SEMIBOLD), criar_fonte(25, FW_SEMIBOLD),
-        criar_fonte(35, FW_BOLD), criar_fonte(55, FW_BOLD)
-    }};
+    DrawRectangleGradientV(41, 121, 918, 374, (Color){28, 36, 56, 255},
+                           (Color){15, 21, 38, 255});
+    for (int linha = 0; linha < 9; ++linha) {
+        for (int coluna = 0; coluna < 23; ++coluna) {
+            int ladrilho_x = 42 + 40 * coluna;
+            int ladrilho_y = 160 + 40 * linha;
+            DrawRectangle(ladrilho_x, ladrilho_y, 39, 39,
+                          Fade((linha + coluna) % 2 == 0 ? WHITE : BLACK, 0.035f));
+            if ((coluna * 7 + linha * 11) % 9 == 2) {
+                DrawLine(ladrilho_x + 10, ladrilho_y + 6, ladrilho_x + 24, ladrilho_y + 15,
+                         Fade(suave, 0.17f));
+                DrawLine(ladrilho_x + 24, ladrilho_y + 15, ladrilho_x + 23, ladrilho_y + 27,
+                         Fade(suave, 0.17f));
+            }
+        }
+    }
+    DrawRectangleGradientV(41, 121, 918, 62, (Color){10, 13, 29, 255},
+                           (Color){28, 35, 56, 255});
+    DrawRectangle(41, 160, 918, 2, Fade(portal, 0.34f));
+    DrawRectangleGradientH(64, 277, 850, 37, Fade(portal, 0.02f), Fade(portal, 0.10f));
+    for (int coluna_x = 64; coluna_x < 928; coluna_x += 96) {
+        DrawRectangle(coluna_x, 130, 9, 34, (Color){39, 43, 73, 255});
+        DrawCircleGradient(coluna_x + 4, 165, 29, Fade(portal, 0.32f), Fade(portal, 0));
+        DrawCircle(coluna_x + 4, 165, 3, portal);
+    }
+    DrawRectangleLinesEx(AREA_MOVIMENTO, 1.0f, Fade(portal, 0.19f));
+}
 
-    preencher(contexto, 0, 0, cliente->right, cliente->bottom, cor_fundo);
-    preencher(contexto, 0, 0, cliente->right, 3, RGB(109, 75, 199));
-    switch (tela) {
-        case TELA_MENU:
-            desenhar_menu(&pintura, erro_nome);
+static void raio_interacao(Vector2 posicao, float tempo, bool perto, Color cor)
+{
+    float pulso = subir_e_descer(parte_fracionaria(tempo * 0.62f));
+    float opacidade = perto ? 0.38f + 0.34f * pulso : 0.27f;
+    DrawCircleV(posicao, DISTANCIA_INTERACAO, Fade(cor, perto ? 0.095f : 0.045f));
+    DrawCircleLinesV(posicao, DISTANCIA_INTERACAO, Fade(cor, opacidade));
+}
+
+static void desenho_inscricao(Vector2 posicao, float tempo, bool perto, bool examinada)
+{
+    Color cor = examinada ? alerta : portal;
+    raio_interacao(posicao, tempo, perto, cor);
+    DrawEllipse((int)posicao.x, (int)posicao.y + 9, 37, 16, Fade(BLACK, 0.48f));
+    Rectangle placa = {posicao.x - 27, posicao.y - 23, 54, 39};
+    painel(placa, (Color){41, 37, 64, 255}, cor);
+    Vector2 topo = {posicao.x, posicao.y - 16};
+    Vector2 esquerda = {posicao.x - 10, posicao.y - 5};
+    Vector2 direita = {posicao.x + 10, posicao.y - 5};
+    Vector2 baixo = {posicao.x, posicao.y + 8};
+    DrawLineEx(topo, esquerda, 2, cor);
+    DrawLineEx(topo, direita, 2, cor);
+    DrawLineEx(esquerda, baixo, 2, cor);
+    DrawLineEx(direita, baixo, 2, cor);
+    DrawLineEx(topo, baixo, 1, Fade(cor, 0.75f));
+}
+
+static void explorar(const QuadroTela *quadro)
+{
+    bool intermediario = quadro->tela == TELA_PORTAL;
+    bool examinado = intermediario && quadro->jogo->portal_examinado;
+    bool perto_portao = quadro->perto == ALVO_PORTAO;
+    bool perto_inscricao = quadro->perto == ALVO_INSCRICAO;
+    cabecalho("EXPLORAÇÃO", intermediario ? "Passagem do templo" : "Entrada da masmorra",
+              "WASD ou setas para andar   /   F para interagir");
+
+    painel((Rectangle){40, 120, 920, 376}, painel_escuro, borda);
+    BeginScissorMode(41, 121, 918, 374);
+    piso_mapa();
+    raio_interacao(POSICAO_PORTAO, quadro->tempo, perto_portao, portal);
+    DrawEllipse((int)POSICAO_PORTAO.x, (int)POSICAO_PORTAO.y + 6, 55, 17, Fade(BLACK, 0.47f));
+    Vector2 portao = {POSICAO_PORTAO.x, POSICAO_PORTAO.y - 26};
+    selo_portal(portao, 0.50f, quadro->tempo, perto_portao);
+    if (intermediario) {
+        desenho_inscricao(POSICAO_INSCRICAO, quadro->tempo, perto_inscricao, examinado);
+    }
+    personagem_desenhar(quadro->personagem, VISUAL_CACADOR, POSE_NORMAL, 0.0f, 0.76f);
+    EndScissorMode();
+
+    if (perto_portao) {
+        DrawText(intermediario ? "[F] Entrar no templo" : "[F] Entrar no túnel", 43, 510, 19, vida);
+    } else if (perto_inscricao) {
+        DrawText(examinado ? "[F] Entrar na passagem lateral" : "[F] Examinar inscrição",
+                 43, 510, 19, examinado ? alerta : vida);
+    } else {
+        DrawText(intermediario ? "Aproxime-se do portão ou das marcas na parede."
+                               : "Aproxime-se do portão para entrar na masmorra.", 43, 510, 19, suave);
+    }
+    if (examinado) {
+        texto_bloco(quadro->jogo->mensagem, (Rectangle){43, 535, 914, 31}, 14, 15, alerta);
+    }
+}
+
+static void barra(Rectangle area, int valor, int maximo, Color cor)
+{
+    DrawRectangleRec(area, Fade(borda, 0.69f));
+    if (valor > 0 && maximo > 0) {
+        area.width *= valor < maximo ? (float)valor / (float)maximo : 1.0f;
+        DrawRectangleRec(area, cor);
+    }
+}
+
+static void fundo_arena(const QuadroTela *quadro)
+{
+    Color brilho = quadro->jogo->chefe_em_furia ? dano : portal;
+    DrawRectangleGradientV(41, 120, 918, 224, (Color){25, 26, 54, 255},
+                           (Color){12, 17, 33, 255});
+    DrawCircleGradient(500, 271, 155, Fade(brilho, 0.24f), Fade(brilho, 0));
+    DrawRectangleGradientV(41, 277, 918, 65, Fade(campo, 0.1f), Fade(campo, 0.86f));
+    for (int coluna_x = 66; coluna_x < 950; coluna_x += 98) {
+        DrawLine(coluna_x, 343, 500 + (coluna_x - 500) / 3, 249, Fade(borda, 0.62f));
+    }
+    for (int linha_y = 285; linha_y <= 329; linha_y += 22) {
+        DrawLine(42, linha_y, 957, linha_y, Fade(borda, 0.58f));
+    }
+    DrawEllipseLines(220, 330, 125, 12, Fade(vida, 0.37f));
+    DrawEllipseLines(755, 330, 125, 12, Fade(brilho, 0.50f));
+}
+
+static VisualPersonagem visual_inimigo(const Inimigo *inimigo)
+{
+    if (inimigo->chefe) {
+        return VISUAL_ESTATUA;
+    }
+    if (strcmp(inimigo->nome, "Cavaleiro Vermelho") == 0 || strstr(inimigo->nome, "Sentinela") != NULL) {
+        return VISUAL_CAVALEIRO;
+    }
+    return VISUAL_MONSTRO;
+}
+
+static void particulas_turno(Vector2 centro, Color cor, float progresso, int quantidade)
+{
+    const Vector2 direcoes[] = {
+        {1, 0}, {1, 0.5f}, {0.7f, 0.7f}, {0.5f, 1}, {0, 1}, {-0.5f, 1},
+        {-0.7f, 0.7f}, {-1, 0.5f}, {-1, 0}, {-1, -0.5f}, {-0.7f, -0.7f},
+        {-0.5f, -1}, {0, -1}, {0.5f, -1}, {0.7f, -0.7f}, {1, -0.5f}
+    };
+    const int total_direcoes = sizeof direcoes / sizeof direcoes[0];
+    for (int indice = 0; indice < quantidade; ++indice) {
+        Vector2 direcao = direcoes[indice * total_direcoes / quantidade];
+        float raio = 18.0f + (indice % 3 * 9 + 47) * progresso;
+        Vector2 posicao = {centro.x + direcao.x * raio, centro.y + direcao.y * raio};
+        DrawCircleV(posicao, 2.0f + indice % 3, Fade(cor, 1.0f - progresso));
+    }
+}
+
+static void atores_combate(const QuadroTela *quadro, const Inimigo *inimigo)
+{
+    float progresso = quadro->progresso_efeito;
+    float impacto = subir_e_descer(progresso);
+    bool atingido = progresso >= 0.35f && progresso <= 0.76f;
+    Personagem cacador = {{220, 333}, quadro->tempo, 1, false};
+    Personagem adversario = {{755, 333}, quadro->tempo + 0.37f, -1, false};
+    PosePersonagem pose_cacador = POSE_NORMAL;
+    PosePersonagem pose_adversario = POSE_NORMAL;
+
+    switch (quadro->efeito) {
+        case EFEITO_ATAQUE:
+            pose_cacador = POSE_ATAQUE;
+            cacador.posicao.x += impacto * 365;
+            pose_adversario = atingido ? POSE_FERIDO : POSE_NORMAL;
             break;
-        case TELA_COMBATE:
-            desenhar_combate(&pintura, jogo, nome, efeito_ms);
+        case EFEITO_DEFESA:
+            pose_cacador = POSE_DEFESA;
+            pose_adversario = POSE_ATAQUE;
+            adversario.posicao.x -= impacto * 370;
             break;
-        case TELA_PORTAL:
-            desenhar_escolha_portal(&pintura, jogo);
+        case EFEITO_SOMBRA:
+            pose_cacador = POSE_ATAQUE;
+            pose_adversario = atingido ? POSE_FERIDO : POSE_NORMAL;
             break;
-        case TELA_INVENTARIO:
-            desenhar_inventario(&pintura, jogo);
-            break;
-        case TELA_RANKING:
-            desenhar_ranking(&pintura, ranking);
-            break;
-        case TELA_AJUDA:
-            desenhar_ajuda(&pintura);
-            break;
-        case TELA_RESULTADO:
-            desenhar_resultado(&pintura, jogo, nome);
+        case EFEITO_POCAO:
+        case EFEITO_NENHUM:
             break;
     }
 
-    for (int indice = 0; indice < QUANTIDADE_FONTES; ++indice) {
-        if (pintura.fontes[indice] != NULL) {
-            DeleteObject(pintura.fontes[indice]);
+    personagem_desenhar(&cacador, VISUAL_CACADOR, pose_cacador, progresso, 1.55f);
+    personagem_desenhar(&adversario, visual_inimigo(inimigo), pose_adversario, progresso, 1.57f);
+
+    Vector2 ponto_cacador = {220, 269};
+    Vector2 ponto_inimigo = {754, 276};
+    if (quadro->efeito == EFEITO_ATAQUE) {
+        DrawRing((Vector2){cacador.posicao.x + 17, 281}, 45, 50, -61, 67, 26,
+                 Fade(texto, impacto * 0.70f));
+        if (atingido) {
+            particulas_turno(ponto_inimigo, dano, progresso, 10);
+        }
+    } else if (quadro->efeito == EFEITO_DEFESA) {
+        DrawCircleV(ponto_cacador, 55, Fade(vida, impacto * 0.15f));
+        DrawRing(ponto_cacador, 54, 57, -76, 75, 30, Fade(vida, impacto));
+        particulas_turno(ponto_cacador, vida, progresso, 8);
+    } else if (quadro->efeito == EFEITO_SOMBRA) {
+        Personagem sombra = {{596 + progresso * 72, 333}, quadro->tempo, 1, false};
+        personagem_desenhar(&sombra, VISUAL_SOMBRA, POSE_ATAQUE, progresso, 1.44f);
+        DrawEllipseLines((int)sombra.posicao.x, 331, 53, 14, Fade(portal, impacto));
+        if (atingido) {
+            particulas_turno(ponto_inimigo, portal, progresso, 14);
+        }
+    } else if (quadro->efeito == EFEITO_POCAO) {
+        DrawCircleGradient(220, 269, 61, Fade(vida, impacto * 0.36f), Fade(vida, 0));
+        for (int indice = 0; indice < 5; ++indice) {
+            int particula_x = 172 + indice * 23;
+            int particula_y = 304 - (int)(progresso * 67) - indice % 2 * 16;
+            DrawRectangle(particula_x, particula_y + 4, 12, 4, Fade(vida, impacto));
+            DrawRectangle(particula_x + 4, particula_y, 4, 12, Fade(vida, impacto));
         }
     }
 }
 
-void tela_pintar(HWND janela, HDC contexto, TelaJogo tela, Jogo *jogo,
-                 const Ranking *ranking, const wchar_t *nome,
-                 const wchar_t *erro_nome, unsigned efeito_ms)
+static void hud_combate(const QuadroTela *quadro)
 {
-    RECT cliente;
-    if (!GetClientRect(janela, &cliente) || cliente.right <= 0 || cliente.bottom <= 0) {
+    const Jogo *jogo = quadro->jogo;
+    const Cacador *cacador = &jogo->cacador;
+    char valor[68];
+
+    painel((Rectangle){40, 352, 272, 80}, painel_escuro, borda);
+    snprintf(valor, sizeof valor, "Nível %d  /  Ataque %d  /  %d pts",
+             cacador->nivel, cacador->ataque, cacador->pontos);
+    DrawText(valor, 54, 367, 16, texto);
+    int proximo_nivel = jogo_experiencia_para_subir(cacador);
+    snprintf(valor, sizeof valor, "XP %d / %d", cacador->experiencia, proximo_nivel);
+    DrawText(valor, 54, 391, 14, suave);
+    barra((Rectangle){54, 414, 243, 5}, cacador->experiencia, proximo_nivel, portal);
+
+    painel((Rectangle){325, 352, 228, 80}, painel_escuro, borda);
+    snprintf(valor, sizeof valor, "ESSÊNCIA  %d / %d", cacador->essencia, ESSENCIA_MAXIMA);
+    DrawText(valor, 339, 367, 14, texto);
+    for (int indice = 0; indice < ESSENCIA_MAXIMA; ++indice) {
+        int largura = 199 / ESSENCIA_MAXIMA;
+        DrawRectangle(339 + indice * largura, 390, largura - 4, 6,
+                      indice < cacador->essencia ? portal : borda);
+    }
+    if (cacador->essencia > 0) {
+        snprintf(valor, sizeof valor, "%s: %d de dano", cacador->tem_igris ? "Igris" : "Sombra",
+                 jogo_dano_sombra(jogo));
+    } else {
+        snprintf(valor, sizeof valor, "%s sem essência", cacador->tem_igris ? "Igris" : "Sombra");
+    }
+    DrawText(valor, 339, 407, 14, cacador->essencia > 0 ? portal : suave);
+
+    bool carregado = jogo_golpe_carregado(jogo);
+    Color cor_aviso = carregado ? alerta : suave;
+    Color fundo_aviso = carregado ? (Color){61, 39, 41, 255} : painel_escuro;
+    painel((Rectangle){566, 352, 394, 80}, fundo_aviso, carregado ? alerta : borda);
+    DrawRectangle(567, 360, 3, 64, carregado ? alerta : borda);
+    DrawText(carregado ? "GOLPE CARREGADO" : "PRÓXIMO GOLPE", 581, 367, 16, cor_aviso);
+    snprintf(valor, sizeof valor, "%d de dano", jogo_dano_previsto(jogo));
+    texto_direita(valor, 943, 366, 18, carregado ? alerta : texto);
+    const char *dica = "Defender reduz o dano pela metade.";
+    if (carregado) {
+        dica = cacador->essencia < ESSENCIA_MAXIMA ? "Defender anula o dano e recupera 1 essência."
+                                                  : "Defender anula o dano.";
+    }
+    texto_bloco(dica, (Rectangle){581, 398, 360, 28}, 14, 16, texto);
+}
+
+static void combate(const QuadroTela *quadro)
+{
+    const Jogo *jogo = quadro->jogo;
+    const Inimigo *inimigo = jogo_inimigo_atual(jogo);
+    cabecalho("SISTEMA / COMBATE", jogo_nome_masmorra(jogo), NULL);
+    painel((Rectangle){40, 119, 920, 225}, painel_escuro, borda);
+    if (inimigo == NULL) {
         return;
     }
 
-    HDC buffer = CreateCompatibleDC(contexto);
-    HBITMAP imagem = CreateCompatibleBitmap(contexto, cliente.right, cliente.bottom);
-    if (buffer != NULL && imagem != NULL) {
-        HGDIOBJ anterior = SelectObject(buffer, imagem);
-        pintar_tela(buffer, &cliente, tela, jogo, ranking, nome, erro_nome, efeito_ms);
-        BitBlt(contexto, 0, 0, cliente.right, cliente.bottom, buffer, 0, 0, SRCCOPY);
-        SelectObject(buffer, anterior);
-    } else {
-        pintar_tela(contexto, &cliente, tela, jogo, ranking, nome, erro_nome, efeito_ms);
+    BeginScissorMode(41, 120, 918, 223);
+    fundo_arena(quadro);
+    atores_combate(quadro, inimigo);
+    EndScissorMode();
+
+    texto_recortado(quadro->nome, (Rectangle){60, 134, 245, 25}, 23, texto);
+    etiqueta("RANK E", (Rectangle){303, 133, 76, 23}, portal);
+    texto_direita(inimigo->nome, 940, 134, 23, texto);
+    char valor[52];
+    snprintf(valor, sizeof valor, "%d / %d PV", jogo->cacador.vida, jogo->cacador.vida_maxima);
+    DrawText(valor, 60, 163, 15, vida);
+    snprintf(valor, sizeof valor, "%d / %d PV", inimigo->vida, jogo->vida_maxima_inimigo);
+    texto_direita(valor, 940, 163, 15, dano);
+    barra((Rectangle){60, 183, 315, 7}, jogo->cacador.vida, jogo->cacador.vida_maxima, vida);
+    barra((Rectangle){625, 183, 315, 7}, inimigo->vida, jogo->vida_maxima_inimigo, dano);
+    if (jogo->chefe_em_furia) {
+        etiqueta("CHEFE EM FÚRIA", (Rectangle){774, 197, 166, 24}, alerta);
+    } else if (inimigo->chefe) {
+        etiqueta("CHEFE", (Rectangle){856, 197, 84, 24}, dano);
     }
 
-    if (imagem != NULL) {
-        DeleteObject(imagem);
+    hud_combate(quadro);
+    painel((Rectangle){40, 441, 920, 115}, painel_escuro, borda);
+    DrawText("REGISTRO DO SISTEMA", 54, 452, 13, portal);
+    texto_bloco(jogo->mensagem, (Rectangle){54, 474, 891, 75}, 15, 17, texto);
+}
+
+static void inventario(const QuadroTela *quadro)
+{
+    cabecalho("CAÇADOR", "Inventário", "Selecione uma poção para recuperar PV.");
+    painel((Rectangle){40, 120, 920, 426}, painel_escuro, borda);
+    const Inventario *itens = &quadro->jogo->cacador.inventario;
+    if (inventario_quantidade(itens) == 0) {
+        texto_central("Seu inventário está vazio.", (Rectangle){60, 152, 880, 330}, 22, suave);
     }
-    if (buffer != NULL) {
-        DeleteDC(buffer);
+    DrawText("Usar uma poção consome um turno.", 60, 514, 17, suave);
+}
+
+static void ranking(const QuadroTela *quadro)
+{
+    cabecalho("RESULTADOS", "Ranking da sessão", "As pontuações ficam disponíveis enquanto o jogo estiver aberto.");
+    painel((Rectangle){40, 120, 920, 426}, painel_escuro, borda);
+    DrawText("POSIÇÃO", 66, 137, 14, suave);
+    DrawText("CAÇADOR", 186, 137, 14, suave);
+    texto_direita("PONTOS", 931, 137, 14, suave);
+    if (quadro->ranking->quantidade == 0) {
+        texto_central("Nenhuma pontuação registrada.", (Rectangle){57, 161, 886, 330}, 22, suave);
+        return;
+    }
+
+    for (int indice = 0; indice < quadro->ranking->quantidade; ++indice) {
+        const Pontuacao *pontuacao = &quadro->ranking->resultados[indice];
+        int linha_y = 165 + 36 * indice;
+        Color cor_linha = indice == 0 ? (Color){56, 43, 94, 255} : campo;
+        DrawRectangleRounded((Rectangle){58, (float)linha_y, 884, 31}, 0.10f, 8, cor_linha);
+        char numero[24];
+        snprintf(numero, sizeof numero, "%02d", indice + 1);
+        DrawText(numero, 70, linha_y + 6, 19, portal);
+        texto_recortado(pontuacao->nome, (Rectangle){186, (float)linha_y + 6, 628, 23}, 19, texto);
+        snprintf(numero, sizeof numero, "%d", pontuacao->pontos);
+        texto_direita(numero, 931, linha_y + 6, 19, texto);
     }
 }
 
-void tela_desenhar_botao(const DRAWITEMSTRUCT *item, TipoBotao tipo)
+static void ajuda(void)
 {
-    HDC contexto = item->hDC;
-    RECT area = item->rcItem;
-    int largura = area.right - area.left;
-    int altura = area.bottom - area.top;
-    COLORREF fundo = COR_CAMPO;
-    COLORREF borda = cor_borda;
-    COLORREF cor = COR_TEXTO;
+    const struct {
+        const char *titulo;
+        const char *descricao;
+    } topicos[] = {
+        {"Explorar", "Use WASD ou as setas para andar. Pressione F perto de um portão ou de uma inscrição."},
+        {"Atacar", "Acerte o inimigo da frente. Se sobreviver, ele pode contra-atacar com o dano indicado pelo Sistema."},
+        {"Defender", "Reduza o dano normal pela metade. Defender um golpe carregado anula o dano e recupera 1 essência."},
+        {"Erga-se", "Use 1 essência para invocar uma sombra. O dano previsto aparece ao lado da reserva de essência."},
+        {"Curar e evoluir", "Usar poção consome o turno. Derrote inimigos para ganhar XP e elevar sua vida e seu ataque."}
+    };
+    cabecalho("CONTROLES E COMBATE", "Como jogar", NULL);
+    painel((Rectangle){40, 120, 920, 426}, painel_escuro, borda);
+    for (size_t indice = 0; indice < sizeof topicos / sizeof topicos[0]; ++indice) {
+        int linha_y = 142 + (int)indice * 76;
+        DrawText(topicos[indice].titulo, 66, linha_y + 13, 22, portal);
+        texto_bloco(topicos[indice].descricao, (Rectangle){286, (float)linha_y + 4, 638, 58}, 20, 23, texto);
+        if (indice + 1 < sizeof topicos / sizeof topicos[0]) {
+            DrawRectangle(66, linha_y + 62, 864, 1, Fade(borda, 0.76f));
+        }
+    }
+}
 
-    if (tipo == BOTAO_PRIMARIO) {
-        fundo = RGB(109, 75, 199);
-        borda = cor_portal;
-    } else if (tipo == BOTAO_PERIGO) {
-        fundo = RGB(48, 28, 52);
-        borda = RGB(106, 58, 91);
-        cor = RGB(255, 193, 212);
+static void resultado(const QuadroTela *quadro)
+{
+    const Jogo *jogo = quadro->jogo;
+    EstadoJogo estado = jogo->estado;
+    bool pontuavel = estado == JOGO_VITORIA || estado == JOGO_DERROTA;
+    const char *titulo = "Partida interrompida";
+    Color cor = alerta;
+    if (estado == JOGO_VITORIA) {
+        titulo = "Vitória";
+        cor = vida;
+    } else if (estado == JOGO_DERROTA) {
+        titulo = "Derrota";
+        cor = dano;
+    }
+    cabecalho("RESULTADO DA CAÇADA", titulo, quadro->nome);
+    painel((Rectangle){40, 120, 920, 426}, painel_escuro, borda);
+    DrawRectangle(41, 128, 4, 410, cor);
+    int y_registro = 174;
+    if (pontuavel) {
+        char total[28];
+        snprintf(total, sizeof total, "%d", jogo->cacador.pontos);
+        DrawText(total, 68, 161, 66, cor);
+        DrawText("PONTOS", 71, 230, 17, suave);
+        y_registro = 297;
+    }
+    DrawText("REGISTRO DO SISTEMA", 70, y_registro - 24, 14, portal);
+    texto_bloco(jogo->mensagem, (Rectangle){70, (float)y_registro, 854, (float)(523 - y_registro)},
+                20, 25, texto);
+}
+
+static void botao_desenhar(const BotaoTela *botao, bool linha_inventario)
+{
+    Color cor = texto;
+    Color cor_borda = borda;
+    Color interior = campo;
+    if (!botao->habilitado) {
+        interior = painel_escuro;
+        cor = Fade(suave, 0.59f);
+    } else if (botao->tipo == BOTAO_PRIMARIO) {
+        interior = (Color){96, 66, 169, 255};
+        cor_borda = portal;
+    } else if (botao->tipo == BOTAO_PERIGO) {
+        interior = (Color){49, 29, 45, 255};
+        cor_borda = (Color){106, 55, 84, 255};
+        cor = (Color){255, 200, 216, 255};
     }
 
-    if (item->itemState & ODS_DISABLED) {
-        fundo = cor_painel;
-        borda = cor_borda;
-        cor = RGB(121, 135, 171);
-    } else if (item->itemState & ODS_SELECTED) {
-        fundo = RGB(53, 49, 92);
+    bool selecionado = botao->habilitado && botao->selecionado;
+    if (selecionado) {
+        cor_borda = cor;
+    }
+    painel(botao->area, interior, cor_borda);
+    if (selecionado) {
+        Rectangle corpo = {botao->area.x + 1, botao->area.y + 1,
+                           botao->area.width - 2, botao->area.height - 2};
+        DrawRectangleRounded(corpo, 0.08f, 8, Fade(cor, 0.15f));
+    }
+    if (linha_inventario) {
+        DrawText(botao->texto, (int)botao->area.x + 18,
+                 (int)(botao->area.y + (botao->area.height - 19) / 2), 19, cor);
+    } else {
+        int tamanho = MeasureText(botao->texto, 19) + 16 > botao->area.width ? 16 : 19;
+        texto_central(botao->texto, botao->area, tamanho, cor);
+    }
+}
+
+void tela_desenhar(const QuadroTela *quadro)
+{
+    fundo_tela();
+    switch (quadro->tela) {
+        case TELA_MENU:
+            menu(quadro);
+            break;
+        case TELA_ENTRADA:
+        case TELA_PORTAL:
+            explorar(quadro);
+            break;
+        case TELA_COMBATE:
+            combate(quadro);
+            break;
+        case TELA_INVENTARIO:
+            inventario(quadro);
+            break;
+        case TELA_RANKING:
+            ranking(quadro);
+            break;
+        case TELA_AJUDA:
+            ajuda();
+            break;
+        case TELA_RESULTADO:
+            resultado(quadro);
+            break;
     }
 
-    preencher(contexto, area.left, area.top, largura, altura, borda);
-    preencher(contexto, area.left + 1, area.top + 1, largura - 2, altura - 2, fundo);
-
-    wchar_t rotulo[64];
-    GetWindowTextW(item->hwndItem, rotulo, 64);
-    HFONT fonte = criar_fonte(16, FW_SEMIBOLD);
-    escrever(contexto, fonte, cor, area.left + 6, area.top, largura - 12, altura,
-             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, rotulo);
-    if (fonte != NULL) {
-        DeleteObject(fonte);
-    }
-
-    if (item->itemState & ODS_FOCUS) {
-        InflateRect(&area, -4, -4);
-        DrawFocusRect(contexto, &area);
+    for (size_t indice = 0; indice < quadro->quantidade_botoes; ++indice) {
+        const BotaoTela *botao = &quadro->botoes[indice];
+        bool linha_inventario = quadro->tela == TELA_INVENTARIO && botao->area.y < 550;
+        botao_desenhar(botao, linha_inventario);
     }
 }
