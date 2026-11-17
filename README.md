@@ -9,8 +9,8 @@ A interface gráfica usa [Raylib 5.5 para Windows de 32 bits](https://github.com
 ```powershell
 $devkit = 'C:\Ferramentas\w64devkit'
 $raylib = 'C:\Ferramentas\raylib-5.5_win32_mingw-w64'
-& "$devkit\bin\gcc.exe" -std=c11 -Wall -Wextra -Wpedantic -I include "-I$raylib\include" src/interface.c src/tela.c src/personagem.c src/jogo.c src/inventario.c src/fila.c src/ordenacao.c src/ranking.c "-L$raylib\lib" -lraylib -lopengl32 -lgdi32 -lwinmm -mwindows -o dungeon_quest_gui.exe
-.\dungeon_quest_gui.exe
+& "$deexevkit\bin\gcc.exe" -std=c11 -Wall -Wextra -Wpedantic -I include "-I$raylib\include" src/interface.c src/tela.c src/personagem.c src/jogo.c src/inventario.c src/fila.c src/ordenacao.c src/ranking.c "-L$raylib\lib" -lraylib -lopengl32 -lgdi32 -lwinmm -mwindows -o dungeon_quest_gui.exe
+.\dungeon_quest_gui.
 ```
 
 Digite o nome do caçador e escolha **Iniciar caça**. Use `WASD` ou as setas para andar pela sala. Aproxime-se de um portal ou de uma inscrição e pressione `F` para interagir. No combate, use o mouse ou os atalhos abaixo. `Tab` e `Enter` também funcionam para navegar pelos controles.
