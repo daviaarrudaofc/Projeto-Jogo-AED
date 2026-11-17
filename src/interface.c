@@ -454,6 +454,28 @@ static void desenhar_interface(Interface *interface, float tempo)
     tela_desenhar(&quadro);
 }
 
+static Rectangle ajustar_tela(void)
+{
+    int largura_janela = GetScreenWidth();
+    int altura_janela = GetScreenHeight();
+    float escala = (float)largura_janela / LARGURA_TELA;
+    float escala_vertical = (float)altura_janela / ALTURA_TELA;
+    if (escala_vertical < escala) {
+        escala = escala_vertical;
+    }
+    if (escala <= 0.0f) {
+        escala = 1.0f;
+    }
+
+    float largura_jogo = LARGURA_TELA * escala;
+    float altura_jogo = ALTURA_TELA * escala;
+    int margem_x = (int)((largura_janela - largura_jogo) / 2);
+    int margem_y = (int)((altura_janela - altura_jogo) / 2);
+    SetMouseOffset(-margem_x, -margem_y);
+    SetMouseScale(1.0f / escala, 1.0f / escala);
+    return (Rectangle){margem_x, margem_y, largura_jogo, altura_jogo};
+}
+
 int main(void)
 {
     SetTraceLogLevel(LOG_WARNING);
@@ -466,16 +488,33 @@ int main(void)
     SetTargetFPS(60);
     SetExitKey(KEY_NULL);
 
+    RenderTexture2D imagem_jogo = LoadRenderTexture(LARGURA_TELA, ALTURA_TELA);
+    if (!IsRenderTextureValid(imagem_jogo)) {
+        CloseWindow();
+        return 1;
+    }
+    Rectangle imagem_origem = {0, 0, LARGURA_TELA, -ALTURA_TELA};
+
     Interface interface = {0};
     ir_para(&interface, TELA_MENU);
     while (!WindowShouldClose()) {
+        if (IsKeyPressed(KEY_F11)) {
+            ToggleBorderlessWindowed();
+        }
+        Rectangle area = ajustar_tela();
         atualizar_interface(&interface, GetFrameTime());
-        BeginDrawing();
+        BeginTextureMode(imagem_jogo);
         desenhar_interface(&interface, (float)GetTime());
+        EndTextureMode();
+
+        BeginDrawing();
+        ClearBackground(BLACK);
+        DrawTexturePro(imagem_jogo.texture, imagem_origem, area, (Vector2){0, 0}, 0, WHITE);
         EndDrawing();
     }
 
     jogo_limpar(&interface.jogo);
+    UnloadRenderTexture(imagem_jogo);
     CloseWindow();
     return 0;
 }

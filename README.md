@@ -22,6 +22,7 @@ Digite o nome do caçador e escolha **Iniciar caça**. Use `WASD` ou as setas pa
 | `E` | **Erga-se**. Gasta uma essência para invocar uma sombra e causar um ataque mais forte. |
 | `I` | Abrir o inventário. Selecionar e usar uma poção recupera vida e consome o turno. |
 | `Esc` | Fechar o inventário sem gastar o turno. |
+| `F11` | Alternar entre tela cheia e janela. |
 
 O aviso de combate informa quando vem um golpe carregado. Se o inimigo estiver quase derrotado, você pode finalizá-lo. Se ele for sobreviver ao ataque, defender pode evitar o golpe e preparar a próxima invocação. Fora do combate, examinar a inscrição revela uma rota opcional com risco e recompensa próprios.
 
